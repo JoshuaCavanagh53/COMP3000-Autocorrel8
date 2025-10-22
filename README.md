@@ -15,7 +15,7 @@ The results are visualized to help investigators interpret the evidence and iden
 -File types: .pcap, .log, .evtx, .json, .csv, .xml, .txt, .db/.sqlite, .jpg/.png
 
 ## Backend Logic ##
--Create modular components such as file parsers, anaylsis, correlation modules: Python
+-Python: Create modular components such as file parsers, anaylsis, correlation modules
 
 ## Frontend and UI ##
 -Flutter/Dart: Create the dashboard interface
