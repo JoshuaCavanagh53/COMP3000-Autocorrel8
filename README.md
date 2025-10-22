@@ -23,3 +23,6 @@ The results are visualized to help investigators interpret the evidence and iden
 ## Databases ##
 -SQlite: Store evidence data and analysis results.
 
+
+## Supervisor ##
+Nathan Clarke
