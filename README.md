@@ -18,7 +18,7 @@ The results are visualized to help investigators interpret the evidence and iden
 -Python: Create modular components such as file parsers, anaylsis, correlation modules
 
 ## Frontend and UI ##
--Flutter/Dart: Create the dashboard interface
+-Python PyQt5 library: Allows me to create a desktop application and python based logic is easy to intergrate.
 
 ## Databases ##
 -SQlite: Store evidence data and analysis results.
