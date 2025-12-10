@@ -1,8 +1,9 @@
 # Import necessary PyQt5 modules
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QLabel, QLineEdit, QTextEdit,
-    QPushButton, QVBoxLayout, QHBoxLayout, QFormLayout, QFrame, QFileDialog, QMessageBox, QListWidget
+    QPushButton, QVBoxLayout, QHBoxLayout, QFormLayout, QFrame, QFileDialog, QMessageBox, QListWidget, QTableWidget, QTableWidgetItem, 
 )
+from PyQt5.QtCore import pyqtSignal
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QColor
 import sys
@@ -324,7 +325,7 @@ class CreateCase(QFrame):
         button_layout.setAlignment(Qt.AlignRight)
 
         cancel_button = QPushButton("Cancel")
-        finish_button = QPushButton("Finish")
+        finish_button = QPushButton("Next")
 
         cancel_button.setStyleSheet("padding: 8px 20px; ")
         finish_button.setStyleSheet("padding: 8px 20px;")
@@ -414,6 +415,9 @@ class CreateCase(QFrame):
             QMessageBox.warning(self, "Invalid Directory", "Please select a valid directory.")
             return
         
+        if not case_data["case_number"].isdigit():
+            QMessageBox.warning(self, "Invalid Case Number", "Case Number must be numeric.")
+            return
         
         metadata_path = self.create_case_folder(case_data)
 
@@ -421,8 +425,242 @@ class CreateCase(QFrame):
             QMessageBox.information(self, "Case Created", f"Case created successfully at:\n{metadata_path}")
             self.close()
 
+            # Build full case folder path
+            case_folder = os.path.join(case_data["directory"], f"Case_{case_data['case_number']}")
+
+            # Open file upload popup with case folder
+            # Open file upload popup
+        self.file_upload_popup = FileUploadPopup(case_folder)
+        self.file_upload_popup.show()  
 
 
+        
+
+        
+
+# Drag-and-drop file
+class DropBox(QFrame):
+    
+    fileDropped = pyqtSignal(str)
+
+    def __init__(self):
+        super().__init__()
+
+        # Enable drag-and-drop on this widget
+        self.setAcceptDrops(True)
+
+        # Set fixed size and visual style
+        self.setFixedSize(100, 100)
+        self.setStyleSheet("background-color: #d3d3d3; border: 2px solid #333; font-size: 8px; color: black;")
+
+        # Add a label to display instructions or uploaded file name
+        self.label = QLabel("Drop files here", self)
+        self.label.setAlignment(Qt.AlignCenter)
+        self.label.setGeometry(0, 0, 100, 100)
+
+    # File type detection
+    @staticmethod
+    def routeFile(file_path):
+        
+        ext = Path(file_path).suffix.lower()
+
+        if ext == ".pcap":
+            return "pcap"
+        elif ext == ".evtx":
+            return "windows_event_parser"
+        elif ext == ".log":
+            return "syslog_parser"
+        elif ext == ".sqlite":
+            return "browser_parser"
+        else: 
+            return "unsupported file type"
+        
+    # Triggered when a dragged item enters the widget
+    def dragEnterEvent(self, event):
+        # Accept only if the dragged item contains file URLs
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+
+    # Triggered when a file is dropped onto the widget
+    def dropEvent(self, event):
+        # Extract local file paths from the dropped URLs
+        files = [url.toLocalFile() for url in event.mimeData().urls()]
+        
+        file_type = self.routeFile(files[0])
+
+        print(f"Detected file type: {file_type}")
+
+        # Display if file is uploaded successfully or unsupported
+        if file_type == "unsupported file type":
+            self.label.setText("Unsupported file type")
+            return
+        # Display the first uploaded file path in the label
+        self.label.setText(f"Uploaded:\n{files[0]}")
+
+        # Emit signal with the first file path
+        self.fileDropped.emit(files[0])  
+
+
+# File upload pop up
+class FileUploadPopup(QFrame):
+    def __init__(self, case_folder):
+        super().__init__()
+        
+        self.case_folder = case_folder
+
+        self.setWindowTitle("Upload Files")
+        self.setFixedSize(600, 500)
+        self.setStyleSheet("background-color: #F5F5F5; border: 1px solid #CCCCCC;")
+
+        main_layout = QVBoxLayout()
+        main_layout.setContentsMargins(30, 30, 30, 30)
+        main_layout.setSpacing(25)
+
+        # Title
+        title = QLabel("Upload Files")
+        title.setStyleSheet("font-size: 20px; font-weight: bold; color: black; border: none;")
+        main_layout.addWidget(title, alignment=Qt.AlignTop)
+
+        # Add drop box
+        self.drop_box = DropBox()
+        self.drop_box.fileDropped.connect(self.handle_file_dropped)
+        
+
+        # Upload button
+        upload_button = QPushButton("Select Files to Upload")
+        upload_button.setStyleSheet("padding: 8px 20px;")
+        upload_button.clicked.connect(self.upload_files)
+        main_layout.addWidget(upload_button)
+
+        main_layout.addWidget(self.drop_box, alignment=Qt.AlignCenter)
+
+        # Buttons at the bottom
+        button_layout = QHBoxLayout()
+        button_layout.setSpacing(20)
+        button_layout.setAlignment(Qt.AlignRight)
+
+        # Set up close and finish buttons
+        close_button = QPushButton("Close")
+        finish_button = QPushButton("Finish")
+
+        close_button.setStyleSheet("padding: 8px 20px; ")
+        finish_button.setStyleSheet("padding: 8px 20px;")
+
+        button_layout.addWidget(close_button)
+        button_layout.addWidget(finish_button)
+
+        close_button.clicked.connect(self.close)
+        finish_button.clicked.connect(self.close)
+
+        main_layout.addStretch(1)
+
+        # Table of uploaded file paths
+        self.file_table = QTableWidget()
+        self.file_table.setColumnCount(2)
+        self.file_table.setHorizontalHeaderLabels(["Uploaded File Paths", "File Size (MB)"])
+        self.file_table.horizontalHeader().setStretchLastSection(False)
+        self.file_table.setColumnWidth(0, 450)  
+        self.file_table.setColumnWidth(1, 100)
+        self.file_table.verticalHeader().setVisible(False)
+        main_layout.addWidget(self.file_table)
+
+        main_layout.addLayout(button_layout)
+
+        self.setStyleSheet("""
+            QLabel {
+                border: none;
+                background: transparent;
+                font-size: 14px;
+                color: black;
+            }
+            QFrame, QWidget {
+                background-color: #F5F5F5;  
+            }
+        """)
+        
+        self.setLayout(main_layout)
+
+    def handle_file_dropped(self, file_path):
+            current_rows = self.file_table.rowCount()
+            self.file_table.setRowCount(current_rows + 1)
+
+            row = current_rows
+            
+            # File path
+            self.file_table.setItem(row, 0, QTableWidgetItem(file_path))
+
+            self.save_files_to_evidence()
+
+            # File size in MB
+            try:
+                size_mb = os.path.getsize(file_path) / (1024 * 1024)
+                self.file_table.setItem(row, 1, QTableWidgetItem(f"{size_mb:.2f}"))
+            except Exception:
+                self.file_table.setItem(row, 1, QTableWidgetItem("Error"))
+
+    def upload_files(self):
+        files, _ = QFileDialog.getOpenFileNames(self, "Select Files to Upload")
+        
+        file_type = self.routeFile(files[0]) if files else None
+
+        if file_type == "unsupported file type":
+            self.drop_box.label.setText("Unsupported file type")
+            return
+        
+        if files:
+            current_rows = self.file_table.rowCount()
+            self.file_table.setRowCount(current_rows + len(files))
+
+            for i, file_path in enumerate(files):
+                row = current_rows + i
+                
+                # File path
+                self.file_table.setItem(row, 0, QTableWidgetItem(file_path))
+
+                # File size in MB
+                try:
+                    size_mb = os.path.getsize(file_path) / (1024 * 1024)
+                    self.file_table.setItem(row, 1, QTableWidgetItem(f"{size_mb:.2f}"))
+                except Exception:
+                    self.file_table.setItem(row, 1, QTableWidgetItem("Error"))
+
+            self.save_files_to_evidence()
+
+    # Save files to evidence folder
+    def save_files_to_evidence(self):
+        
+        evidence_dir = os.path.join(self.case_folder, "evidence")
+        os.makedirs(evidence_dir, exist_ok=True)
+
+        for row in range(self.file_table.rowCount()):
+            file_path_item = self.file_table.item(row, 0)
+            if file_path_item:
+                file_path = file_path_item.text()
+                try:
+                    shutil.copy(file_path, evidence_dir)
+                except Exception as e:
+                    print(f"Error copying {file_path} to evidence folder: {e}")
+
+                
+
+
+        
+    # File type detection
+    @staticmethod
+    def routeFile(file_path):
+        
+        ext = Path(file_path).suffix.lower()
+
+        if ext == ".pcap":
+            return "pcap"
+        elif ext == ".evtx":
+            return "windows_event_parser"
+        elif ext == ".log":
+            return "syslog_parser"
+        elif ext == ".sqlite":
+            return "browser_parser"
+        else: 
+            return "unsupported file type"
 
 # Main application window
 class AutoCorrel8Dashboard(QMainWindow):
