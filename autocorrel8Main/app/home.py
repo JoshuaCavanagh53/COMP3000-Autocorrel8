@@ -428,8 +428,8 @@ class CreateCase(QFrame):
             # Build full case folder path
             case_folder = os.path.join(case_data["directory"], f"Case_{case_data['case_number']}")
 
-            # Open file upload popup with case folder
-            # Open file upload popup
+
+        # Open file upload popup with case folder
         self.file_upload_popup = FileUploadPopup(case_folder)
         self.file_upload_popup.show()  
 
@@ -641,10 +641,6 @@ class FileUploadPopup(QFrame):
                 except Exception as e:
                     print(f"Error copying {file_path} to evidence folder: {e}")
 
-                
-
-
-        
     # File type detection
     @staticmethod
     def routeFile(file_path):
