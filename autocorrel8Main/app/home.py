@@ -12,39 +12,92 @@ import json
 from pathlib import Path
 import datetime
 import shutil
+from correlationDash import CorrelationDashBoard
+
+
+# Color schemes
+DARK_THEME = {
+    'background': '#1E1E1E',
+    'surface': '#252526',
+    'surface_elevated': '#2D2D30',
+    'border': '#3E3E42',
+    'text_primary': '#CCCCCC',
+    'text_secondary': '#858585',
+    'accent': '#007ACC',
+    'accent_hover': '#1C97EA',
+    'nav_bg': '#2D2D30',
+    'button_bg': '#3E3E42',
+    'button_checked': '#094771',
+}
+
+LIGHT_THEME = {
+    'background': '#FFFFFF',
+    'surface': '#F5F5F5',
+    'surface_elevated': '#FFFFFF',
+    'border': '#E0E0E0',
+    'text_primary': '#1E1E1E',
+    'text_secondary': '#616161',
+    'accent': '#0078D4',
+    'accent_hover': '#106EBE',
+    'nav_bg': '#F3F3F3',
+    'button_bg': '#E8E8E8',
+    'button_checked': '#CCE4F7',
+}
+
+# Change this to switch themes: 'dark' or 'light'
+CURRENT_THEME = 'dark'
+THEME = DARK_THEME if CURRENT_THEME == 'dark' else LIGHT_THEME
 
 
 # Top navigation bar
 class TopNavBar(QFrame):
     def __init__(self):
-        
-        # Top navigation bar setup
         super().__init__()
         self.setFixedHeight(75)
-        self.setStyleSheet("background-color: ##F5F5F5; border: 1px solid #E0E0E0;")
+        self.setStyleSheet(f"""
+            QFrame {{
+                background-color: {THEME['nav_bg']};
+                border-bottom: 1px solid {THEME['border']};
+            }}
+        """)
         layout = QHBoxLayout()
-        layout.setContentsMargins(10, 0, 10, 0)
+        layout.setContentsMargins(20, 0, 20, 0)
         layout.setSpacing(40)
 
         # Title label
         title = QLabel("AutoCorrel8")
-        title.setStyleSheet("color: black; font-size: 18px; font-weight: bold; border: none;")
+        title.setStyleSheet(f"""
+            color: {THEME['accent']};
+            font-size: 20px;
+            font-weight: bold;
+            border: none;
+        """)
         layout.addWidget(title)
 
-        
         # Cases and tool information buttons
         self.case_button = QLabel("Cases")
-        self.case_button.setStyleSheet("color: black; font-size: 14px; border: none;")
+        self.case_button.setStyleSheet(f"""
+            color: {THEME['text_primary']};
+            font-size: 14px;
+            border: none;
+            padding: 5px 10px;
+        """)
+        self.case_button.setCursor(Qt.PointingHandCursor)
         layout.addWidget(self.case_button)
     
         self.tool_info_button = QLabel("Tool Information")
-        self.tool_info_button.setStyleSheet("color: black; font-size: 14px; border: none;")
+        self.tool_info_button.setStyleSheet(f"""
+            color: {THEME['text_primary']};
+            font-size: 14px;
+            border: none;
+            padding: 5px 10px;
+        """)
+        self.tool_info_button.setCursor(Qt.PointingHandCursor)
         layout.addWidget(self.tool_info_button)
 
-
         layout.addStretch()
-
         self.setLayout(layout)
+
 
 # Case management
 class CaseManagement(QFrame):
@@ -52,7 +105,12 @@ class CaseManagement(QFrame):
         super().__init__()
         self.setWindowTitle("Case Management")
         self.setFixedSize(800, 600)
-        self.setStyleSheet("background-color: #F5F5F5; border: 1px solid #E0E0E0;")
+        self.setStyleSheet(f"""
+            QFrame {{
+                background-color: {THEME['surface']};
+                border: 1px solid {THEME['border']};
+            }}
+        """)
 
         # Main horizontal layout for two columns
         main_layout = QHBoxLayout()
@@ -66,7 +124,12 @@ class CaseManagement(QFrame):
         left_frame.setStyleSheet("border: none;")
 
         description_title = QLabel("About Case Management")
-        description_title.setStyleSheet("font-size: 16px; font-weight: bold; color: black; border: none;")
+        description_title.setStyleSheet(f"""
+            font-size: 16px;
+            font-weight: bold;
+            color: {THEME['text_primary']};
+            border: none;
+        """)
         left_layout.addWidget(description_title, alignment=Qt.AlignTop)
 
         description_text = QLabel(
@@ -75,16 +138,21 @@ class CaseManagement(QFrame):
             "Use the options on the right to get started."
         )
         description_text.setWordWrap(True)
-        description_text.setStyleSheet("font-size: 14px; color: #333333; border: none;")
+        description_text.setStyleSheet(f"""
+            font-size: 14px;
+            color: {THEME['text_secondary']};
+            border: none;
+        """)
         left_layout.addWidget(description_text, alignment=Qt.AlignTop)
 
         # Right bordered section with title + buttons
         section_frame = QFrame()
-        section_frame.setStyleSheet("""
-            QFrame {
-                border: 1px solid #A0A0A0;
-                background-color: #FFFFFF;
-            }
+        section_frame.setStyleSheet(f"""
+            QFrame {{
+                border: 1px solid {THEME['border']};
+                background-color: {THEME['surface_elevated']};
+                border-radius: 6px;
+            }}
         """)
         section_layout = QVBoxLayout(section_frame)
         section_layout.setContentsMargins(20, 20, 20, 20)
@@ -92,7 +160,12 @@ class CaseManagement(QFrame):
 
         # Title at the top inside the bordered section
         title = QLabel("Case Management")
-        title.setStyleSheet("font-size: 16px; font-weight: bold; color: black; border: none;")
+        title.setStyleSheet(f"""
+            font-size: 16px;
+            font-weight: bold;
+            color: {THEME['text_primary']};
+            border: none;
+        """)
         section_layout.addWidget(title, alignment=Qt.AlignTop)
 
         section_layout.addStretch(1)
@@ -100,32 +173,42 @@ class CaseManagement(QFrame):
         # Centered buttons
         self.create_case_button = QLabel("Create Case")
         self.create_case_button.setFixedWidth(320)
-        self.create_case_button.setStyleSheet("""
-            QLabel {
-                color: black;
+        self.create_case_button.setStyleSheet(f"""
+            QLabel {{
+                color: {THEME['text_primary']};
                 font-size: 14px;
-                border: 1px solid #A0A0A0;
+                border: 1px solid {THEME['border']};
                 padding: 12px;
                 border-radius: 6px;
                 qproperty-alignment: AlignCenter;
-            }
-            QLabel:hover { background-color: #F5F5F5; }
+                background-color: {THEME['button_bg']};
+            }}
+            QLabel:hover {{
+                background-color: {THEME['surface']};
+                border: 1px solid {THEME['accent']};
+            }}
         """)
+        self.create_case_button.setCursor(Qt.PointingHandCursor)
         section_layout.addWidget(self.create_case_button, alignment=Qt.AlignCenter)
 
         self.open_case_button = QLabel("Open Cases")
         self.open_case_button.setFixedWidth(320)
-        self.open_case_button.setStyleSheet("""
-            QLabel {
-                color: black;
+        self.open_case_button.setStyleSheet(f"""
+            QLabel {{
+                color: {THEME['text_primary']};
                 font-size: 14px;
-                border: 1px solid #A0A0A0;
+                border: 1px solid {THEME['border']};
                 padding: 12px;
                 border-radius: 6px;
                 qproperty-alignment: AlignCenter;
-            }
-            QLabel:hover { background-color: #F5F5F5; }
+                background-color: {THEME['button_bg']};
+            }}
+            QLabel:hover {{
+                background-color: {THEME['surface']};
+                border: 1px solid {THEME['accent']};
+            }}
         """)
+        self.open_case_button.setCursor(Qt.PointingHandCursor)
         section_layout.addWidget(self.open_case_button, alignment=Qt.AlignCenter)
 
         section_layout.addStretch(1)
@@ -152,14 +235,19 @@ class CaseManagement(QFrame):
         
         self.setLayout(main_layout)
 
+
 # Open existing cases pop up
 class OpenCases(QFrame):
-
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Open Cases")
         self.setFixedSize(600, 400)
-        self.setStyleSheet("background-color: #F5F5F5; border: 1px solid #CCCCCC;")
+        self.setStyleSheet(f"""
+            QFrame {{
+                background-color: {THEME['surface']};
+                border: 1px solid {THEME['border']};
+            }}
+        """)
 
         main_layout = QVBoxLayout()
         main_layout.setContentsMargins(30, 30, 30, 30)
@@ -167,48 +255,95 @@ class OpenCases(QFrame):
 
         # Title
         title = QLabel("Open Cases")
-        title.setStyleSheet("font-size: 20px; font-weight: bold; color: black; border: none;")
+        title.setStyleSheet(f"""
+            font-size: 20px;
+            font-weight: bold;
+            color: {THEME['text_primary']};
+            border: none;
+        """)
         main_layout.addWidget(title, alignment=Qt.AlignTop)
 
         # Buttons
         button_layout = QVBoxLayout()
 
         select_dir_button = QPushButton("Select Case Directory")
-        select_dir_button.setStyleSheet("padding: 8px 20px;")
+        select_dir_button.setStyleSheet(f"""
+            QPushButton {{
+                padding: 8px 20px;
+                background-color: {THEME['button_bg']};
+                color: {THEME['text_primary']};
+                border: 1px solid {THEME['border']};
+                border-radius: 4px;
+            }}
+            QPushButton:hover {{
+                background-color: {THEME['surface_elevated']};
+                border: 1px solid {THEME['accent']};
+            }}
+        """)
         select_dir_button.clicked.connect(self.select_directory)
         button_layout.addWidget(select_dir_button)
         main_layout.addLayout(button_layout)
         
         # Case list widget
         self.case_list = QListWidget()
-        self.case_list.setStyleSheet("background-color: white; border: 1px solid #A0A0A0;")
+        self.case_list.setStyleSheet(f"""
+            QListWidget {{
+                background-color: {THEME['surface_elevated']};
+                color: {THEME['text_primary']};
+                border: 1px solid {THEME['border']};
+                border-radius: 4px;
+            }}
+            QListWidget::item:hover {{
+                background-color: {THEME['button_bg']};
+            }}
+            QListWidget::item:selected {{
+                background-color: {THEME['button_checked']};
+                color: {THEME['accent']};
+            }}
+        """)
         main_layout.addWidget(self.case_list)
         
+        self.case_list.itemDoubleClicked.connect(self.open_selected_case)
+
         # Close button at the bottom
         close_button = QPushButton("Close")
-        close_button.setStyleSheet("padding: 8px 20px;")
+        close_button.setStyleSheet(f"""
+            QPushButton {{
+                padding: 8px 20px;
+                background-color: {THEME['button_bg']};
+                color: {THEME['text_primary']};
+                border: 1px solid {THEME['border']};
+                border-radius: 4px;
+            }}
+            QPushButton:hover {{
+                background-color: {THEME['surface_elevated']};
+                border: 1px solid {THEME['accent']};
+            }}
+        """)
         close_button.clicked.connect(self.close)
 
         main_layout.addStretch(1)
         main_layout.addWidget(close_button, alignment=Qt.AlignRight)
-
-        self.setStyleSheet("""
-            QLabel {
-                border: none;
-                background: transparent;
-                font-size: 14px;
-                color: black;
-            }
-            QFrame, QWidget {
-                background-color: #F5F5F5;  
-            }
-        """)
         
         self.setLayout(main_layout)
 
+    # Open selected case
+    def open_selected_case(self, item):
+        case_text = item.text()
+        case_number_start = case_text.find("#") + 1
+       
+
+        case_folder_start = case_text.find("Case Directory: ") + len("Case Directory: ")
+        case_folder_end = case_text.find(" - Notes:")
+        case_folder = case_text[case_folder_start:case_folder_end]
+
+        # Open correlation dashboard with the selected case folder
+        self.correlation_dashboard = CorrelationDashBoard(case_folder)
+        self.correlation_dashboard.show()
+        self.close()
+
     # Select directory
     def select_directory(self):
-        # Let user choose the parent folder
         directory = QFileDialog.getExistingDirectory(self, "Select Case Directory")
         if directory:
             self.load_cases(directory)
@@ -236,9 +371,9 @@ class OpenCases(QFrame):
                         data = json.load(f)
                     case_name = data.get("case_name", "Unknown")
                     case_number = data.get("case_number", "Unknown")
+                    case_dir = os.path.join(parent_dir, folder)
                     notes = data.get("investigator", {}).get("notes", "")
-                    # Format display text
-                    display_text = f"Case Name: {case_name} - Case Number: (#{case_number}) - Notes: {notes[:50]}..."
+                    display_text = f"Case Name: {case_name} - Case Number: (#{case_number}) - Case Directory: {case_dir} - Notes: {notes[:50]}..."
                     self.case_list.addItem(display_text)
                 except Exception as e:
                     self.case_list.addItem(f"{folder} (error reading metadata)")
@@ -246,15 +381,18 @@ class OpenCases(QFrame):
                 self.case_list.addItem(f"{folder} (no metadata.json)")
 
 
-
 # Create new case pop up
 class CreateCase(QFrame):
-    
     def __init__(self):
         super().__init__()
         self.setWindowTitle("New Case")
         self.setFixedSize(800, 650)
-        self.setStyleSheet("background-color: #F5F5F5; border: 1px solid #CCCCCC;")
+        self.setStyleSheet(f"""
+            QFrame {{
+                background-color: {THEME['surface']};
+                border: 1px solid {THEME['border']};
+            }}
+        """)
 
         main_layout = QVBoxLayout()
         main_layout.setContentsMargins(30, 30, 30, 30)
@@ -262,12 +400,22 @@ class CreateCase(QFrame):
 
         # Title
         title = QLabel("New Case")
-        title.setStyleSheet("font-size: 20px; font-weight: bold; color: black; border: none;")
+        title.setStyleSheet(f"""
+            font-size: 20px;
+            font-weight: bold;
+            color: {THEME['text_primary']};
+            border: none;
+        """)
         main_layout.addWidget(title, alignment=Qt.AlignTop)
 
         # Case Information Section
         case_info_label = QLabel("Case Information")
-        case_info_label.setStyleSheet("font-size: 16px; font-weight: bold; color: black; border: none;")
+        case_info_label.setStyleSheet(f"""
+            font-size: 16px;
+            font-weight: bold;
+            color: {THEME['text_primary']};
+            border: none;
+        """)
         main_layout.addWidget(case_info_label)
 
         case_form = QFormLayout()
@@ -275,29 +423,56 @@ class CreateCase(QFrame):
         case_form.setFormAlignment(Qt.AlignLeft)
         case_form.setSpacing(10)
 
+        # Style for form labels
+        label_style = f"color: {THEME['text_primary']}; border: none;"
+
         self.case_name = QLineEdit()
         self.case_number = QLineEdit()
         
         # Case Directory with Browse button
         self.case_directory = QLineEdit()
         self.select_dir_button = QPushButton("Browse...")
+        self.select_dir_button.setStyleSheet(f"""
+            QPushButton {{
+                padding: 6px 12px;
+                background-color: {THEME['button_bg']};
+                color: {THEME['text_primary']};
+                border: 1px solid {THEME['border']};
+                border-radius: 4px;
+            }}
+            QPushButton:hover {{
+                background-color: {THEME['surface_elevated']};
+                border: 1px solid {THEME['accent']};
+            }}
+        """)
         self.select_dir_button.clicked.connect(self.select_directory)
 
         case_dir_layout = QHBoxLayout()
         case_dir_layout.addWidget(self.case_directory) 
         case_dir_layout.addWidget(self.select_dir_button) 
 
-        case_form.addRow("Case Directory:", case_dir_layout)
+        # Create labels with proper styling
+        dir_label = QLabel("Case Directory:")
+        dir_label.setStyleSheet(label_style)
+        name_label = QLabel("Case Name:")
+        name_label.setStyleSheet(label_style)
+        number_label = QLabel("Case Number:")
+        number_label.setStyleSheet(label_style)
 
-        case_form.addRow("Case Name:", self.case_name)
-        case_form.addRow("Case Number:", self.case_number)
-        
+        case_form.addRow(dir_label, case_dir_layout)
+        case_form.addRow(name_label, self.case_name)
+        case_form.addRow(number_label, self.case_number)
 
         main_layout.addLayout(case_form)
 
         # Investigator Section
         investigator_label = QLabel("Investigator")
-        investigator_label.setStyleSheet("font-size: 16px; font-weight: bold; color: black; border: none;")
+        investigator_label.setStyleSheet(f"""
+            font-size: 16px;
+            font-weight: bold;
+            color: {THEME['text_primary']};
+            border: none;
+        """)
         main_layout.addWidget(investigator_label)
 
         investigator_form = QFormLayout()
@@ -311,11 +486,20 @@ class CreateCase(QFrame):
         self.investigator_notes = QTextEdit()
         self.investigator_notes.setFixedHeight(80)
 
-        investigator_form.addRow("Name:", self.investigator_name)
-        investigator_form.addRow("Email:", self.investigator_email)
-        investigator_form.addRow("Phone:", self.investigator_phone)
-        investigator_form.addRow("Notes:", self.investigator_notes)
-        
+        # Create investigator labels with styling
+        inv_name_label = QLabel("Name:")
+        inv_name_label.setStyleSheet(label_style)
+        inv_email_label = QLabel("Email:")
+        inv_email_label.setStyleSheet(label_style)
+        inv_phone_label = QLabel("Phone:")
+        inv_phone_label.setStyleSheet(label_style)
+        inv_notes_label = QLabel("Notes:")
+        inv_notes_label.setStyleSheet(label_style)
+
+        investigator_form.addRow(inv_name_label, self.investigator_name)
+        investigator_form.addRow(inv_email_label, self.investigator_email)
+        investigator_form.addRow(inv_phone_label, self.investigator_phone)
+        investigator_form.addRow(inv_notes_label, self.investigator_notes)
 
         main_layout.addLayout(investigator_form)
 
@@ -327,8 +511,21 @@ class CreateCase(QFrame):
         cancel_button = QPushButton("Cancel")
         finish_button = QPushButton("Next")
 
-        cancel_button.setStyleSheet("padding: 8px 20px; ")
-        finish_button.setStyleSheet("padding: 8px 20px;")
+        button_style = f"""
+            QPushButton {{
+                padding: 8px 20px;
+                background-color: {THEME['button_bg']};
+                color: {THEME['text_primary']};
+                border: 1px solid {THEME['border']};
+                border-radius: 4px;
+            }}
+            QPushButton:hover {{
+                background-color: {THEME['surface_elevated']};
+                border: 1px solid {THEME['accent']};
+            }}
+        """
+        cancel_button.setStyleSheet(button_style)
+        finish_button.setStyleSheet(button_style)
 
         cancel_button.clicked.connect(self.close)
         finish_button.clicked.connect(self.submit_case)
@@ -339,36 +536,30 @@ class CreateCase(QFrame):
         main_layout.addStretch(1)
         main_layout.addLayout(button_layout)
 
-        self.setStyleSheet("""
-            QLabel {
-                border: none;
-                background: transparent;
-                font-size: 14px;
-                color: black;
-            }
-            QFrame, QWidget {
-                background-color: #F5F5F5;  
-            }
-            QLineEdit, QTextEdit {
-                background-color: white;   
-                border: 1px solid #A0A0A0;
+        # Apply input field styling
+        input_style = f"""
+            QLineEdit, QTextEdit {{
+                background-color: {THEME['surface_elevated']};
+                border: 1px solid {THEME['border']};
                 padding: 6px;
                 border-radius: 4px;
-            }
-        """)
+                color: {THEME['text_primary']};
+            }}
+            QLineEdit:focus, QTextEdit:focus {{
+                border: 1px solid {THEME['accent']};
+            }}
+        """
+        self.setStyleSheet(self.styleSheet() + input_style)
         
         self.setLayout(main_layout)
 
     # Select directory
     def select_directory(self):
-        
-        # Open file dialog to select directory
         directory = QFileDialog.getExistingDirectory(self, "Select Case Directory")
         if directory:
             self.case_directory.setText(directory) 
 
     def create_case_folder(self, case_data):
-        
         parent_dir = case_data["directory"]
         case_folder = os.path.join(parent_dir, f"Case_{case_data['case_number']}")
 
@@ -382,7 +573,6 @@ class CreateCase(QFrame):
         os.makedirs(os.path.join(case_folder, "reports"), exist_ok=True)
         os.makedirs(os.path.join(case_folder, "notes"), exist_ok=True)
 
-        
         # Save metadata.json
         metadata_path = os.path.join(case_folder, "metadata.json")
         with open(metadata_path, "w") as f:
@@ -391,7 +581,6 @@ class CreateCase(QFrame):
         return metadata_path
     
     def submit_case(self):
-        
         # Create case folder
         case_data = {
             "directory": self.case_directory.text(),
@@ -428,19 +617,13 @@ class CreateCase(QFrame):
             # Build full case folder path
             case_folder = os.path.join(case_data["directory"], f"Case_{case_data['case_number']}")
 
+            # Open file upload popup with case folder
+            self.file_upload_popup = FileUploadPopup(case_folder)
+            self.file_upload_popup.show()
 
-        # Open file upload popup with case folder
-        self.file_upload_popup = FileUploadPopup(case_folder)
-        self.file_upload_popup.show()  
-
-
-        
-
-        
 
 # Drag-and-drop file
 class DropBox(QFrame):
-    
     fileDropped = pyqtSignal(str)
 
     def __init__(self):
@@ -451,17 +634,27 @@ class DropBox(QFrame):
 
         # Set fixed size and visual style
         self.setFixedSize(100, 100)
-        self.setStyleSheet("background-color: #d3d3d3; border: 2px solid #333; font-size: 8px; color: black;")
+        self.setStyleSheet(f"""
+            QFrame {{
+                background-color: {THEME['button_bg']};
+                border: 2px dashed {THEME['border']};
+                border-radius: 6px;
+            }}
+        """)
 
         # Add a label to display instructions or uploaded file name
         self.label = QLabel("Drop files here", self)
         self.label.setAlignment(Qt.AlignCenter)
         self.label.setGeometry(0, 0, 100, 100)
+        self.label.setStyleSheet(f"""
+            color: {THEME['text_secondary']};
+            font-size: 9px;
+            border: none;
+        """)
 
     # File type detection
     @staticmethod
     def routeFile(file_path):
-        
         ext = Path(file_path).suffix.lower()
 
         if ext == ".pcap":
@@ -477,28 +670,47 @@ class DropBox(QFrame):
         
     # Triggered when a dragged item enters the widget
     def dragEnterEvent(self, event):
-        # Accept only if the dragged item contains file URLs
         if event.mimeData().hasUrls():
             event.acceptProposedAction()
+            self.setStyleSheet(f"""
+                QFrame {{
+                    background-color: {THEME['button_checked']};
+                    border: 2px dashed {THEME['accent']};
+                    border-radius: 6px;
+                }}
+            """)
+
+    def dragLeaveEvent(self, event):
+        self.setStyleSheet(f"""
+            QFrame {{
+                background-color: {THEME['button_bg']};
+                border: 2px dashed {THEME['border']};
+                border-radius: 6px;
+            }}
+        """)
 
     # Triggered when a file is dropped onto the widget
     def dropEvent(self, event):
-        # Extract local file paths from the dropped URLs
+        self.setStyleSheet(f"""
+            QFrame {{
+                background-color: {THEME['button_bg']};
+                border: 2px dashed {THEME['border']};
+                border-radius: 6px;
+            }}
+        """)
+        
         files = [url.toLocalFile() for url in event.mimeData().urls()]
         
         file_type = self.routeFile(files[0])
 
         print(f"Detected file type: {file_type}")
 
-        # Display if file is uploaded successfully or unsupported
         if file_type == "unsupported file type":
-            self.label.setText("Unsupported file type")
+            self.label.setText("Unsupported\nfile type")
             return
-        # Display the first uploaded file path in the label
-        self.label.setText(f"Uploaded:\n{files[0]}")
-
-        # Emit signal with the first file path
-        self.fileDropped.emit(files[0])  
+            
+        self.label.setText(f"Uploaded:\n{Path(files[0]).name}")
+        self.fileDropped.emit(files[0])
 
 
 # File upload pop up
@@ -510,7 +722,12 @@ class FileUploadPopup(QFrame):
 
         self.setWindowTitle("Upload Files")
         self.setFixedSize(600, 500)
-        self.setStyleSheet("background-color: #F5F5F5; border: 1px solid #CCCCCC;")
+        self.setStyleSheet(f"""
+            QFrame {{
+                background-color: {THEME['surface']};
+                border: 1px solid {THEME['border']};
+            }}
+        """)
 
         main_layout = QVBoxLayout()
         main_layout.setContentsMargins(30, 30, 30, 30)
@@ -518,41 +735,37 @@ class FileUploadPopup(QFrame):
 
         # Title
         title = QLabel("Upload Files")
-        title.setStyleSheet("font-size: 20px; font-weight: bold; color: black; border: none;")
+        title.setStyleSheet(f"""
+            font-size: 20px;
+            font-weight: bold;
+            color: {THEME['text_primary']};
+            border: none;
+        """)
         main_layout.addWidget(title, alignment=Qt.AlignTop)
 
         # Add drop box
         self.drop_box = DropBox()
         self.drop_box.fileDropped.connect(self.handle_file_dropped)
-        
 
         # Upload button
         upload_button = QPushButton("Select Files to Upload")
-        upload_button.setStyleSheet("padding: 8px 20px;")
+        upload_button.setStyleSheet(f"""
+            QPushButton {{
+                padding: 8px 20px;
+                background-color: {THEME['button_bg']};
+                color: {THEME['text_primary']};
+                border: 1px solid {THEME['border']};
+                border-radius: 4px;
+            }}
+            QPushButton:hover {{
+                background-color: {THEME['surface_elevated']};
+                border: 1px solid {THEME['accent']};
+            }}
+        """)
         upload_button.clicked.connect(self.upload_files)
         main_layout.addWidget(upload_button)
 
         main_layout.addWidget(self.drop_box, alignment=Qt.AlignCenter)
-
-        # Buttons at the bottom
-        button_layout = QHBoxLayout()
-        button_layout.setSpacing(20)
-        button_layout.setAlignment(Qt.AlignRight)
-
-        # Set up close and finish buttons
-        close_button = QPushButton("Close")
-        finish_button = QPushButton("Finish")
-
-        close_button.setStyleSheet("padding: 8px 20px; ")
-        finish_button.setStyleSheet("padding: 8px 20px;")
-
-        button_layout.addWidget(close_button)
-        button_layout.addWidget(finish_button)
-
-        close_button.clicked.connect(self.close)
-        finish_button.clicked.connect(self.close)
-
-        main_layout.addStretch(1)
 
         # Table of uploaded file paths
         self.file_table = QTableWidget()
@@ -562,23 +775,71 @@ class FileUploadPopup(QFrame):
         self.file_table.setColumnWidth(0, 450)  
         self.file_table.setColumnWidth(1, 100)
         self.file_table.verticalHeader().setVisible(False)
+        self.file_table.setStyleSheet(f"""
+            QTableWidget {{
+                background-color: {THEME['surface_elevated']};
+                color: {THEME['text_primary']};
+                border: 1px solid {THEME['border']};
+                border-radius: 4px;
+                gridline-color: {THEME['border']};
+            }}
+            QTableWidget::item {{
+                padding: 5px;
+            }}
+            QTableWidget::item:selected {{
+                background-color: {THEME['button_checked']};
+                color: {THEME['accent']};
+            }}
+            QHeaderView::section {{
+                background-color: {THEME['button_bg']};
+                color: {THEME['text_primary']};
+                padding: 5px;
+                border: 1px solid {THEME['border']};
+                font-weight: bold;
+            }}
+        """)
         main_layout.addWidget(self.file_table)
 
-        main_layout.addLayout(button_layout)
+        # Buttons at the bottom
+        button_layout = QHBoxLayout()
+        button_layout.setSpacing(20)
+        button_layout.setAlignment(Qt.AlignRight)
 
-        self.setStyleSheet("""
-            QLabel {
-                border: none;
-                background: transparent;
-                font-size: 14px;
-                color: black;
-            }
-            QFrame, QWidget {
-                background-color: #F5F5F5;  
-            }
-        """)
+        close_button = QPushButton("Close")
+        finish_button = QPushButton("Finish")
+
+        button_style = f"""
+            QPushButton {{
+                padding: 8px 20px;
+                background-color: {THEME['button_bg']};
+                color: {THEME['text_primary']};
+                border: 1px solid {THEME['border']};
+                border-radius: 4px;
+            }}
+            QPushButton:hover {{
+                background-color: {THEME['surface_elevated']};
+                border: 1px solid {THEME['accent']};
+            }}
+        """
+        close_button.setStyleSheet(button_style)
+        finish_button.setStyleSheet(button_style)
+
+        button_layout.addWidget(close_button)
+        button_layout.addWidget(finish_button)
+
+
+        close_button.clicked.connect(self.close)
+        finish_button.clicked.connect(self.open_new_screen)
+
+        main_layout.addLayout(button_layout)
         
         self.setLayout(main_layout)
+
+    def open_new_screen(self):
+            current_case_path = self.case_folder
+            self.new_window = CorrelationDashBoard(current_case_path)
+            self.new_window.show()
+            self.close()
 
     def handle_file_dropped(self, file_path):
             current_rows = self.file_table.rowCount()
@@ -688,7 +949,7 @@ class AutoCorrel8Dashboard(QMainWindow):
 
         # Main content + description container
         content_container = QWidget()
-        content_container.setStyleSheet("background-color: #F5F5F5;") 
+        content_container.setStyleSheet(f"background-color: {THEME['background']};")
         content_layout = QVBoxLayout(content_container)
         content_layout.setContentsMargins(0, 20, 0, 0)  
         content_layout.setSpacing(10)
@@ -696,7 +957,7 @@ class AutoCorrel8Dashboard(QMainWindow):
 
         # Main content area
         content_area = QLabel("Welcome to AutoCorrel8 Dashboard")
-        content_area.setStyleSheet("font-size: 20px; font-weight: bold; color: black;")
+        content_area.setStyleSheet(f"font-size: 20px; font-weight: bold; color: {THEME['text_primary']};")
         content_area.setAlignment(Qt.AlignCenter)
 
         # Description label
@@ -704,7 +965,7 @@ class AutoCorrel8Dashboard(QMainWindow):
             "AutoCorrel8 is an automated tool for correlation analysis. "
             "Click on 'Cases' to manage your datasets or 'Tool Information' to learn more."
         )
-        description.setStyleSheet("color: black; font-size: 16px;")
+        description.setStyleSheet(f"color: {THEME['text_secondary']}; font-size: 16px;")
         description.setAlignment(Qt.AlignCenter)
 
         # Add both to the content layout
