@@ -1,42 +1,13 @@
-# Import necessary PyQt5 modules
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QLabel, 
-    QPushButton, QVBoxLayout, QHBoxLayout, QFrame, QFileSystemModel, QTreeView,
+    QPushButton, QVBoxLayout, QHBoxLayout, QFrame, QFileSystemModel, QTreeView, QTableWidget, QTableWidgetItem, QScrollArea, QLineEdit, QFileDialog
 )
-from PyQt5.QtCore import Qt, QDir
+from PyQt5.QtCore import Qt , QDir, pyqtSignal
+
+
+from themes import DARK_THEME, LIGHT_THEME
+from ast import Load
 import sys
-
-
-
-
-# Color schemes
-DARK_THEME = {
-    'background': '#1E1E1E',
-    'surface': '#252526',
-    'surface_elevated': '#2D2D30',
-    'border': '#3E3E42',
-    'text_primary': '#CCCCCC',
-    'text_secondary': '#858585',
-    'accent': '#007ACC',
-    'accent_hover': '#1C97EA',
-    'nav_bg': '#2D2D30',
-    'button_bg': '#3E3E42',
-    'button_checked': '#094771',
-}
-
-LIGHT_THEME = {
-    'background': '#FFFFFF',
-    'surface': '#F5F5F5',
-    'surface_elevated': '#FFFFFF',
-    'border': '#E0E0E0',
-    'text_primary': '#1E1E1E',
-    'text_secondary': '#616161',
-    'accent': '#0078D4',
-    'accent_hover': '#106EBE',
-    'nav_bg': '#F3F3F3',
-    'button_bg': '#E8E8E8',
-    'button_checked': '#CCE4F7',
-}
 
 # Dark mode by default
 CURRENT_THEME = 'dark'
@@ -92,7 +63,7 @@ class TopNavBar(QFrame):
         layout.addStretch()
         self.setLayout(layout)
 
-
+# Button layout for navigation
 class ButtonLayout(QFrame):
     def __init__(self):
         super().__init__()
@@ -128,6 +99,10 @@ class ButtonLayout(QFrame):
         self.case_overview_button.setFixedHeight(40)
         self.case_overview_button.setFixedWidth(120)
         self.case_overview_button.setCheckable(True)
+        
+        # Case overview checked by default
+        self.case_overview_button.setChecked(True)
+
         self.case_overview_button.setCursor(Qt.PointingHandCursor)
         layout.addWidget(self.case_overview_button)
 
@@ -137,6 +112,8 @@ class ButtonLayout(QFrame):
         self.add_source_button.setFixedWidth(120)
         self.add_source_button.setCheckable(True)
         self.add_source_button.setCursor(Qt.PointingHandCursor)
+        
+        
         layout.addWidget(self.add_source_button)
 
         self.correlation_button = QPushButton("Correlation")
@@ -149,8 +126,13 @@ class ButtonLayout(QFrame):
 
         self.setLayout(layout)
 
+    def add_source_clicked(self, function):
+        self.add_source_button.clicked.connect(function)
 
 class DataSources(QFrame):
+
+    fileSelected = pyqtSignal(str)
+
     def __init__(self, start_path=r"path"):
         super().__init__()
         self.setFixedHeight(400)
@@ -182,6 +164,8 @@ class DataSources(QFrame):
         self.tree = QTreeView()
         self.tree.setModel(self.model)
         self.tree.setRootIndex(self.model.index(start_path))
+
+        self.tree.selectionModel().selectionChanged.connect(self._on_selection_changed)
 
         self.tree.setStyleSheet(f"""
             QTreeView {{
@@ -235,10 +219,17 @@ class DataSources(QFrame):
 
         self.setLayout(layout)
 
-        
+    def _on_selection_changed(self, selected, deselected):
+        index = self.tree.currentIndex()
+        if not index.isValid():
+            return
 
-class SourceOverview(QFrame):
-    def __init__(self):
+        path = self.model.filePath(index)
+        self.fileSelected.emit(path)
+
+# Create a selection table to select fields for correlation
+class CorrelationSelectionTable(QFrame):
+    def __init__(self, number_of_fields):
         super().__init__()
         self.setFixedHeight(450)
         self.setFixedWidth(800)
@@ -246,8 +237,11 @@ class SourceOverview(QFrame):
         layout.setContentsMargins(15, 15, 15, 15)
         layout.setSpacing(10)
         
+        # Set number of fields
+        self.number_of_fields = number_of_fields
+
         # Add title
-        title = QLabel("Source Overview")
+        title = QLabel("Correlation Selection")
         title.setStyleSheet(f"""
             color: {THEME['text_primary']};
             font-size: 16px;
@@ -262,67 +256,49 @@ class SourceOverview(QFrame):
                 border-radius: 6px;
             }}
         """)
+
+        # Create table
+        self.field_table = self.create_table()
+        layout.addWidget(self.field_table)
+
         self.setLayout(layout)
 
-
-class DataOverview(QFrame):
-    def __init__(self):
-        super().__init__()
-        self.setFixedHeight(400)
-        self.setFixedWidth(1525)
-        layout = QVBoxLayout()
-        layout.setContentsMargins(15, 15, 15, 15)
-        layout.setSpacing(10)
-        
-        # Add title
-        title = QLabel("Data Overview")
-        title.setStyleSheet(f"""
-            color: {THEME['text_primary']};
-            font-size: 16px;
-            font-weight: bold;
-        """)
-        layout.addWidget(title)
-        
-        self.setStyleSheet(f"""
-            QFrame {{
+    def create_table(self):
+        # Table to select fields for correlation
+        self.correlation_selection_table = QTableWidget()
+        self.correlation_selection_table.setColumnCount(self.number_of_fields)
+        self.correlation_selection_table.horizontalHeader().setStretchLastSection(False)
+        self.correlation_selection_table.setColumnWidth(100, 800 // self.number_of_fields)  
+        self.correlation_selection_table.verticalHeader().setVisible(False)
+        self.correlation_selection_table.setStyleSheet(f"""
+            QTableWidget {{
                 background-color: {THEME['surface_elevated']};
+                color: {THEME['text_primary']};
                 border: 1px solid {THEME['border']};
-                border-radius: 6px;
+                border-radius: 4px;
+                gridline-color: {THEME['border']};
+            }}
+            QTableWidget::item {{
+                padding: 5px;
+            }}
+            QTableWidget::item:selected {{
+                background-color: {THEME['button_checked']};
+                color: {THEME['accent']};
+            }}
+            QHeaderView::section {{
+                background-color: {THEME['button_bg']};
+                color: {THEME['text_primary']};
+                padding: 5px;
+                border: 1px solid {THEME['border']};
+                font-weight: bold;
             }}
         """)
-        self.setLayout(layout)
+        return self.correlation_selection_table
 
 
-class InvestigatorNotes(QFrame):
-    def __init__(self):
-        super().__init__()
-        self.setFixedHeight(450)
-        self.setFixedWidth(1075)
-        layout = QVBoxLayout()
-        layout.setContentsMargins(15, 15, 15, 15)
-        layout.setSpacing(10)
-        
-        # Add title
-        title = QLabel("Investigator Notes")
-        title.setStyleSheet(f"""
-            color: {THEME['text_primary']};
-            font-size: 16px;
-            font-weight: bold;
-        """)
-        layout.addWidget(title)
-        
-        self.setStyleSheet(f"""
-            QFrame {{
-                background-color: {THEME['surface_elevated']};
-                border: 1px solid {THEME['border']};
-                border-radius: 6px;
-            }}
-        """)
-        self.setLayout(layout)
 
-
-# Main correlation window
-class CorrelationDashBoard(QMainWindow):
+# Correlation Dashboard Main Window
+class CorrelationDashboard(QMainWindow):
     def __init__(self, path):
         super().__init__()
         
@@ -361,51 +337,34 @@ class CorrelationDashBoard(QMainWindow):
         top_boxes_layout = QHBoxLayout()
         top_boxes_layout.setSpacing(15)
         
-        # Data sources box 
-        data_sources = DataSources(self.path)
+        # Add DataSources box
+        data_sources = DataSources(start_path=self.path)
         top_boxes_layout.addWidget(data_sources, alignment=Qt.AlignTop | Qt.AlignLeft)
-        
-        # Data overview box 
-        data_overview = DataOverview()
-        top_boxes_layout.addWidget(data_overview, alignment=Qt.AlignTop | Qt.AlignLeft)
-        
-        # Add stretch to push everything to the left
-        top_boxes_layout.addStretch()
-        
+
         # Add the horizontal layout to the main content layout
         content_layout.addLayout(top_boxes_layout)
         
-        # Create horizontal layout for SourceOverview and InvestigatorNotes
+        # Create horizontal layout 
         bottom_boxes_layout = QHBoxLayout()
         bottom_boxes_layout.setSpacing(15)
-        
-        # Data source overview (left)
-        source_overview = SourceOverview()
-        bottom_boxes_layout.addWidget(source_overview, alignment=Qt.AlignTop | Qt.AlignLeft)
 
-        # Investigator notes (right)
-        investigator_notes = InvestigatorNotes()
-        bottom_boxes_layout.addWidget(investigator_notes, alignment=Qt.AlignTop | Qt.AlignLeft)
-        
-        # Add stretch to push everything to the left
-        bottom_boxes_layout.addStretch()
-        
-        # Add the bottom horizontal layout to the main content layout
+        # Data source overview (left)
+        correlation_selection_table = CorrelationSelectionTable(5)
+        bottom_boxes_layout.addWidget(correlation_selection_table, alignment=Qt.AlignTop | Qt.AlignLeft)
         content_layout.addLayout(bottom_boxes_layout)
 
-        # Add space at the bottom
-        content_layout.addSpacing(20)
-        
+        # Add stretch to push everything to the left
+        top_boxes_layout.addStretch()
+
+        main_layout.addWidget(content_container)
+
         # Build from the top down
         content_layout.addStretch()
 
-        # Add the container to the main layout
-        main_layout.addWidget(content_container)
-
-
-# Start the application 
+# Start the application
 if __name__ == "__main__":
     app = QApplication(sys.argv)
-    window = CorrelationDashBoard(path=r"path_to_case_folder")
+    window = CorrelationDashboard(path="C:\\Users\\jjc19\\OneDrive\\Documents\\Cases\\Case_1")
     window.show()
     sys.exit(app.exec())
+        
