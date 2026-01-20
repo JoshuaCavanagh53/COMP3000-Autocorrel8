@@ -412,34 +412,51 @@ class PacketLoaderThread(QThread):
             self.error.emit(str(e))
     
     def convert_tshark_packet(self, tshark_pkt):
-        """Convert tshark JSON packet to our format"""
+        # Convert tshark JSON packet to our format
         layers = tshark_pkt.get("_source", {}).get("layers", {})
-        
+
+        # Get frame number for unique ID
+        frame_number = layers.get("frame.number", [None])[0]
+
         # Extract core fields
+        src_ip = layers.get("ip.src", [None])[0]
+        dst_ip = layers.get("ip.dst", [None])[0]
+        src_port = layers.get("tcp.srcport", layers.get("udp.srcport", [None]))[0]
+        dst_port = layers.get("tcp.dstport", layers.get("udp.dstport", [None]))[0]
+        protocol_stack = layers.get("frame.protocols", [None])[0]
+
+        # Generate descriptive packet name
+        packet_name = self.generate_packet_name(
+            frame_number, src_ip, dst_ip, src_port, dst_port, protocol_stack, layers
+        )
+
         packet = {
+            "packet_id": f"pkt_{frame_number}",  # Unique identifier
+            "packet_name": packet_name,  # Descriptive name
+            "frame_number": frame_number,
             "timestamp": layers.get("frame.time_epoch", [None])[0],
-            "src_ip": layers.get("ip.src", [None])[0],
-            "dst_ip": layers.get("ip.dst", [None])[0],
-            "src_port": layers.get("tcp.srcport", layers.get("udp.srcport", [None]))[0],
-            "dst_port": layers.get("tcp.dstport", layers.get("udp.dstport", [None]))[0],
-            "protocol": layers.get("frame.protocols", [None])[0],
+            "src_ip": src_ip,
+            "dst_ip": dst_ip,
+            "src_port": src_port,
+            "dst_port": dst_port,
+            "protocol": protocol_stack,
             "length": layers.get("frame.len", [None])[0],
             "layers": {}
         }
-        
+
         # Add DNS info if present
         if "dns.qry.name" in layers:
             packet["layers"]["dns"] = {
                 "query": layers.get("dns.qry.name", [None])[0]
             }
-        
+
         # Add HTTP info if present
         if "http.request.method" in layers:
             packet["layers"]["http"] = {
                 "method": layers.get("http.request.method", [None])[0],
                 "host": layers.get("http.host", [None])[0]
             }
-        
+
         # Add TLS info if present
         if "tls.handshake.extensions_server_name" in layers:
             packet["layers"]["tls"] = {
@@ -447,6 +464,40 @@ class PacketLoaderThread(QThread):
             }
 
         return packet
+
+    def generate_packet_name(self, frame_num, src_ip, dst_ip, src_port, dst_port, protocol_stack, layers):
+        
+        # Generate a human-readable packet name
+
+        # Extract the highest-level protocol
+        if protocol_stack:
+            protocols = protocol_stack.split(":")
+            top_protocol = protocols[-1].upper()
+        else:
+            top_protocol = "UNKNOWN"
+
+        # Create contextual names based on protocol
+        if "dns.qry.name" in layers:
+            query = layers.get("dns.qry.name", [None])[0]
+            return f"DNS_{frame_num}_{query}"
+
+        elif "http.request.method" in layers:
+            method = layers.get("http.request.method", [None])[0]
+            host = layers.get("http.host", [None])[0] or "unknown"
+            return f"HTTP_{frame_num}_{method}_{host}"
+
+        elif "tls.handshake.extensions_server_name" in layers:
+            server_name = layers.get("tls.handshake.extensions_server_name", [None])[0]
+            return f"TLS_{frame_num}_{server_name}"
+
+        elif src_ip and dst_ip:
+            # For other protocols, use IPs and ports
+            port_info = f":{src_port}" if src_port else ""
+            return f"{top_protocol}_{frame_num}_{src_ip}{port_info}_to_{dst_ip}"
+
+        else:
+            # Fallback
+            return f"Packet_{frame_num}_{top_protocol}"
 
 
 class DataOverview(QFrame):
@@ -457,6 +508,10 @@ class DataOverview(QFrame):
         self.layout = QVBoxLayout()
         self.layout.setContentsMargins(15, 15, 15, 15)
         self.layout.setSpacing(10)
+
+        # Store packets organized by file
+        self.packets_by_file = {}
+        self.current_file_path = None
 
         # Add title
         self.title = QLabel("Data Overview")
@@ -511,6 +566,7 @@ class DataOverview(QFrame):
         # Store the loader thread
         self.loader_thread = None
 
+    # Load packet chart for a given file
     def load_packet_chart(self, file_path):
        
         # Always remove old chart before doing anything else 
@@ -519,36 +575,40 @@ class DataOverview(QFrame):
         # Load packet data and display chart
         print(f"load_packet_chart called with: {file_path}")
         
-        # Check if packet list already exists
-        if hasattr(self, 'packets') and self.packets and file_path == self.current_file_path:
-            print("Using cached packets")
-            self.on_packets_loaded(self.packets)
+        # Check if it's a PCAP file
+        if not (file_path.endswith('.pcap') or file_path.endswith('.pcapng')):
+            print(f"Not a PCAP file: {file_path}")
+            self.show_placeholder()
             return
-        
-        else:
-            # Check if it's a PCAP file
-            if not (file_path.endswith('.pcap') or file_path.endswith('.pcapng')):
-                print(f"Not a PCAP file: {file_path}")
-                self.show_placeholder()
-                return
-            
-            print(f"Starting to load PCAP file: {file_path}")
-            
-            # Store current file path
-            self.current_file_path = file_path
+    
+        # Get the filename for cache lookup
+        file_name = os.path.basename(file_path)
 
-            # Clear previous content
-            self.clear_content()
-            
-            # Show loading state
-            self.show_loading()
-            
-            # Start background loading
-            self.loader_thread = PacketLoaderThread(file_path)
-            self.loader_thread.finished.connect(self.on_packets_loaded)
-            self.loader_thread.finished.connect(self.handle_packets)
-            self.loader_thread.error.connect(self.on_loading_error)
-            self.loader_thread.start()
+        # Check if packets already loaded for this file
+        if file_name in self.packets_by_file:
+            print(f"Using cached packets for file: {file_name}")
+            cached_packets = self.packets_by_file[file_name]
+            self.current_file_path = file_path
+            self.on_packets_loaded(cached_packets)
+            return
+       
+        print(f"Stating a new load PCAP file: {file_path}")
+
+        # Store current file path
+        self.current_file_path = file_path
+
+        # Clear previous content
+        self.clear_content()
+
+        # Show loading indicator
+        self.show_loading()
+
+        # Start background loading
+        self.loader_thread = PacketLoaderThread(file_path)
+        self.loader_thread.finished.connect(self.on_packets_loaded)
+        self.loader_thread.finished.connect(self.handle_packets)
+        self.loader_thread.error.connect(self.on_loading_error)
+        self.loader_thread.start()
 
     def count_protocols(self, packets):
         proto_counts = Counter()
@@ -566,10 +626,46 @@ class DataOverview(QFrame):
     
     # Store packet for later use
     def handle_packets(self, packets): 
+        
         print("Received packets:", len(packets)) 
-        self.packets = packets
-        self.protocol_counts = self.count_protocols(packets)
-        print("Protocol counts:", self.protocol_counts)
+        
+        # Get the file name from the current file path
+        file_name = os.path.basename(self.current_file_path)
+
+        # Tag each packet with its source file
+        for packet in packets:
+            packet["source_file"] = file_name
+            packet["source_path"] = self.current_file_path
+        
+        # Store packets by file name
+        self.packets_by_file[file_name] = packets
+        
+        # Also store protocol counts per file
+        if not hasattr(self, 'protocol_counts_by_file'):
+            self.protocol_counts_by_file = {}
+
+        self.protocol_counts_by_file[file_name] = self.count_protocols(packets)
+
+        # Write data into packets file for future use
+        packets_file_path = os.path.join("packetFiles", f"{file_name}_packets.json")
+
+        # Check if file is already stored in directory
+        if not os.path.exists(packets_file_path):
+            with open(packets_file_path, "w", encoding="utf-8") as f:
+                json.dump(packets, f, indent=4)
+            
+            print(f"Packets written to: {packets_file_path}")
+            
+        else:
+            print(f"File already exists: {packets_file_path}")
+
+
+        # Test packet stuff
+        cw1_packets = self.get_packets_for_file("cw1.pcap")
+        print(f"Packets from cw1.pcap: {len(cw1_packets)}")
+
+        print(f"Stored {len(packets)} packets for file: {file_name}")
+        print("Available files:", list(self.packets_by_file.keys()))
         
     # Remove old charts
     def remove_old_chart(self):
@@ -738,7 +834,12 @@ class DataOverview(QFrame):
 
         return chart_view
 
-
+    # Helper functions for getting stored packets
+    def get_packets_for_file(self, file_name):
+        
+        # Get all packets from a specific file
+        return self.packets_by_file.get(file_name, [])
+    
 class InvestigatorNotes(QFrame):
     def __init__(self, case_path):
         super().__init__()

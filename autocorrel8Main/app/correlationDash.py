@@ -3,7 +3,7 @@ from PyQt5.QtWidgets import (
     QPushButton, QVBoxLayout, QHBoxLayout, QFrame, QFileSystemModel, QTreeView, QTableWidget, QTableWidgetItem, QScrollArea, QLineEdit, QFileDialog
 )
 from PyQt5.QtCore import Qt , QDir, pyqtSignal
-
+from overviewDash import DataOverview
 
 from themes import DARK_THEME, LIGHT_THEME
 from ast import Load
@@ -357,6 +357,11 @@ class CorrelationDashboard(QMainWindow):
         top_boxes_layout.addStretch()
 
         main_layout.addWidget(content_container)
+
+        # Instantiate DataOverview for packet handeling and display 
+        self.data_overview = DataOverview()
+
+        self.data_overview.get_packets_for_file("cw1.pcap")
 
         # Build from the top down
         content_layout.addStretch()
