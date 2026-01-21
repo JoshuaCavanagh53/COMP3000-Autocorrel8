@@ -18,6 +18,7 @@ import json
 import shutil
 from collections import Counter
 from themes import DARK_THEME, LIGHT_THEME
+from mongoDBConnection import DatabaseHelper, DatabaseUploadThread
 
 
 # Dark mode by default
@@ -286,7 +287,7 @@ class SourceOverview(QFrame):
                 self.file_table.setItem(row, 1, QTableWidgetItem(source_type))  
                 self.file_table.setItem(row, 2, QTableWidgetItem(timestamp))
                 self.file_table.setItem(row, 3, QTableWidgetItem(str(file_size_mb)))
-                self.file_table.setItem(row, 4, QTableWidgetItem("Loaded"))  
+                self.file_table.setItem(row, 4, QTableWidgetItem("Loading..."))  
 
         self.setLayout(layout)
 
@@ -326,13 +327,22 @@ class SourceOverview(QFrame):
             }}
         """)
         return self.file_table
+    
+    def update_file_status(self, file_name, status):
+        
+        # Update the status column for a specific file
+        for row in range(self.file_table.rowCount()):
+            item = self.file_table.item(row, 0)
+            if item and item.text() == file_name:
+                self.file_table.setItem(row, 4, QTableWidgetItem(status))
+                break
 
 
 class PacketLoaderThread(QThread):
     
     # Background thread for loading packets
-    finished = pyqtSignal(list)
-    error = pyqtSignal(str)
+    finished = pyqtSignal(list, str)  # packets, file_name
+    error = pyqtSignal(str, str)  # error_message, file_name
     progress = pyqtSignal(str)
     
     def __init__(self, file_path):
@@ -342,8 +352,9 @@ class PacketLoaderThread(QThread):
     
     def run(self):
         try:
+            file_name = os.path.basename(self.file_path)
             print(f"Starting to parse packets from: {self.file_path}")
-            self.progress.emit("Parsing packets with tshark...")
+            self.progress.emit(f"Parsing {file_name}...")
             
             # Use tshark to export to JSON
             cmd = [
@@ -379,7 +390,7 @@ class PacketLoaderThread(QThread):
                 raise Exception(f"tshark failed: {result.stderr}")
             
             print("Parsing tshark JSON output...")
-            self.progress.emit("Processing packet data...")
+            self.progress.emit(f"Processing {file_name}...")
             
             # Parse JSON output
             tshark_packets = json.loads(result.stdout)
@@ -393,23 +404,23 @@ class PacketLoaderThread(QThread):
                     
                     if (idx + 1) % 1000 == 0:
                         print(f"Processed {idx + 1} packets...")
-                        self.progress.emit(f"Processed {idx + 1} packets...")
+                        self.progress.emit(f"Processed {idx + 1} packets from {file_name}...")
                         
                 except Exception as e:
                     print(f"Error converting packet {idx}: {e}")
                     continue
             
-            print(f"Finished parsing {len(packets)} packets")
-            self.finished.emit(packets)
+            print(f"Finished parsing {len(packets)} packets from {file_name}")
+            self.finished.emit(packets, file_name)
             
         except subprocess.TimeoutExpired:
             print("tshark timed out")
-            self.error.emit("Packet parsing timed out (file too large)")
+            self.error.emit("Packet parsing timed out (file too large)", file_name)
         except Exception as e:
             print(f"Error in thread: {e}")
             import traceback
             traceback.print_exc()
-            self.error.emit(str(e))
+            self.error.emit(str(e), file_name)
     
     def convert_tshark_packet(self, tshark_pkt):
         # Convert tshark JSON packet to our format
@@ -501,6 +512,12 @@ class PacketLoaderThread(QThread):
 
 
 class DataOverview(QFrame):
+    
+    # Signals for file loading status
+    fileLoadStarted = pyqtSignal(str)  
+    fileLoadCompleted = pyqtSignal(str)  
+    fileLoadFailed = pyqtSignal(str) 
+    
     def __init__(self):
         super().__init__()
         self.setFixedHeight(400)
@@ -512,6 +529,7 @@ class DataOverview(QFrame):
         # Store packets organized by file
         self.packets_by_file = {}
         self.current_file_path = None
+        self.loading_files = set()  # Track which files are currently loading
 
         # Add title
         self.title = QLabel("Data Overview")
@@ -522,7 +540,7 @@ class DataOverview(QFrame):
         """)
         self.layout.addWidget(self.title)
         
-        # Loading label (initially hidden)
+        # Loading label 
         self.loading_label = QLabel("Loading packet data...")
         self.loading_label.setStyleSheet(f"""
             color: {THEME['text_secondary']};
@@ -533,7 +551,7 @@ class DataOverview(QFrame):
         self.loading_label.hide()
         self.layout.addWidget(self.loading_label)
         
-        # Error label (initially hidden)
+        # Error label 
         self.error_label = QLabel()
         self.error_label.setStyleSheet(f"""
             color: #ff6b6b;
@@ -563,52 +581,158 @@ class DataOverview(QFrame):
 
         self.setLayout(self.layout)
         
-        # Store the loader thread
-        self.loader_thread = None
+        
+        # Store the loader threads
+        self.loader_threads = []
 
-    # Load packet chart for a given file
-    def load_packet_chart(self, file_path):
-       
-        # Always remove old chart before doing anything else 
+        # Store the upload threads
+        self.upload_threads = []
+
+    def display_chart_for_file(self, file_path):
+        
+        # Display chart for a selected file 
+        print(f"display_chart_for_file called with: {file_path}")
+        
+        # Always remove old chart first
         self.remove_old_chart()
-
-        # Load packet data and display chart
-        print(f"load_packet_chart called with: {file_path}")
         
         # Check if it's a PCAP file
         if not (file_path.endswith('.pcap') or file_path.endswith('.pcapng')):
             print(f"Not a PCAP file: {file_path}")
             self.show_placeholder()
             return
-    
-        # Get the filename for cache lookup
+        
         file_name = os.path.basename(file_path)
-
-        # Check if packets already loaded for this file
+        
+        # Check if file is currently loading
+        if file_name in self.loading_files:
+            print(f"File is still loading: {file_name}")
+            self.show_loading(f"Loading {file_name}...")
+            return
+        
+        # Check if packets already loaded
         if file_name in self.packets_by_file:
             print(f"Using cached packets for file: {file_name}")
-            cached_packets = self.packets_by_file[file_name]
             self.current_file_path = file_path
-            self.on_packets_loaded(cached_packets)
-            return
-       
-        print(f"Stating a new load PCAP file: {file_path}")
+            self.display_packets(self.packets_by_file[file_name])
+        else:
+            # Packets haven't loaded yet, show loading
+            print(f"Packets not yet loaded for: {file_name}")
+            self.show_loading(f"Processing {file_name}...")
 
-        # Store current file path
-        self.current_file_path = file_path
+    def preload_all_pcap_files(self, file_list):
+        
+        # Start loading all PCAP files in the background
+        print(f"Starting preload of {len(file_list)} files")
+        
+        for file_path in file_list:
+            if file_path.endswith('.pcap') or file_path.endswith('.pcapng'):
+                file_name = os.path.basename(file_path)
+                
+                # Check if already cached in JSON
+                packets_file_path = os.path.join("packetFiles", f"{file_name}_packets.json")
+                
+                if os.path.exists(packets_file_path):
+                    # Load from cache
+                    print(f"Loading cached packets for: {file_name}")
+                    try:
+                        with open(packets_file_path, "r", encoding="utf-8") as f:
+                            packets = json.load(f)
+                        self.packets_by_file[file_name] = packets
+                        print(f"Loaded {len(packets)} packets from cache for {file_name}")
+                    except Exception as e:
+                        print(f"Error loading cached packets for {file_name}: {e}")
+                        # If cache fails, load normally
+                        self.start_loading_file(file_path, file_name)
+                else:
+                    # Need to parse with tshark
+                    self.start_loading_file(file_path, file_name)
+    
+    def start_loading_file(self, file_path, file_name):
+        
+        # Start loading a single file in background"
+        print(f"Starting background load for: {file_name}")
+        self.loading_files.add(file_name)
+        self.fileLoadStarted.emit(file_name)
+        
+        loader_thread = PacketLoaderThread(file_path)
+        loader_thread.finished.connect(self.on_file_loaded)
+        loader_thread.error.connect(self.on_file_error)
+        
+        loader_thread.start()
+        
+        self.loader_threads.append(loader_thread)
 
-        # Clear previous content
-        self.clear_content()
+    def on_file_loaded(self, packets, file_name):
+        
+        # Called when a file finishes loading
+        print(f"File loaded: {file_name} with {len(packets)} packets")
+        
+        # Start background DB upload
+        upload_thread = DatabaseUploadThread(packets, file_name) 
+        upload_thread.finished.connect(lambda fn: print(f"DB upload complete for {fn}"))
+        upload_thread.error.connect(lambda err: print(f"DB upload error: {err}"))
+        upload_thread.start() 
+        
+        self.upload_threads.append(upload_thread) # Prevents garbage collection
+        # Remove from loading set
+        self.loading_files.discard(file_name)
+        
+        # Tag packets with source file
+        for packet in packets:
+            packet["source_file"] = file_name
+        
+        # Store packets
+        self.packets_by_file[file_name] = packets
+        
+        # Emit completion signal
+        self.fileLoadCompleted.emit(file_name)
+        
+        # Save to cache
+        packets_file_path = os.path.join("packetFiles", f"{file_name}_packets.json")
+        os.makedirs("packetFiles", exist_ok=True)
+        
+        # Store packets locally
+        try:
+            with open(packets_file_path, "w", encoding="utf-8") as f:
+                json.dump(packets, f, indent=4)
+            print(f"Cached packets to: {packets_file_path}")
+        except Exception as e:
+            print(f"Error caching packets: {e}")
+        
+        # If this is the currently selected file, update display
+        if self.current_file_path and os.path.basename(self.current_file_path) == file_name:
+            self.display_packets(packets)
+    
+    def on_file_error(self, error_message, file_name):
+        """Called when a file fails to load"""
+        print(f"Error loading file {file_name}: {error_message}")
+        self.loading_files.discard(file_name)
+        self.fileLoadFailed.emit(file_name)
+        
+        # If this was the currently selected file, show error
+        if self.current_file_path and os.path.basename(self.current_file_path) == file_name:
+            self.show_error(error_message)
 
-        # Show loading indicator
-        self.show_loading()
-
-        # Start background loading
-        self.loader_thread = PacketLoaderThread(file_path)
-        self.loader_thread.finished.connect(self.on_packets_loaded)
-        self.loader_thread.finished.connect(self.handle_packets)
-        self.loader_thread.error.connect(self.on_loading_error)
-        self.loader_thread.start()
+    def display_packets(self, packets):
+        """Display the packet chart for loaded packets"""
+        print(f"Displaying chart for {len(packets)} packets")
+        
+        self.loading_label.hide()
+        self.placeholder_label.hide()
+        self.error_label.hide()
+        
+        # Add packet chart to layout
+        packet_chart = self.packet_chart(packets)
+        self.layout.addWidget(packet_chart)
+        
+        # Add packet count info
+        info_label = QLabel(f"Total packets: {len(packets)}")
+        info_label.setStyleSheet(f"""
+            color: {THEME['text_secondary']};
+            font-size: 12px;
+        """)
+        self.layout.insertWidget(1, info_label)
 
     def count_protocols(self, packets):
         proto_counts = Counter()
@@ -624,49 +748,6 @@ class DataOverview(QFrame):
 
         return proto_counts
     
-    # Store packet for later use
-    def handle_packets(self, packets): 
-        
-        print("Received packets:", len(packets)) 
-        
-        # Get the file name from the current file path
-        file_name = os.path.basename(self.current_file_path)
-
-        # Tag each packet with its source file
-        for packet in packets:
-            packet["source_file"] = file_name
-            packet["source_path"] = self.current_file_path
-        
-        # Store packets by file name
-        self.packets_by_file[file_name] = packets
-        
-        # Also store protocol counts per file
-        if not hasattr(self, 'protocol_counts_by_file'):
-            self.protocol_counts_by_file = {}
-
-        self.protocol_counts_by_file[file_name] = self.count_protocols(packets)
-
-        # Write data into packets file for future use
-        packets_file_path = os.path.join("packetFiles", f"{file_name}_packets.json")
-
-        # Check if file is already stored in directory
-        if not os.path.exists(packets_file_path):
-            with open(packets_file_path, "w", encoding="utf-8") as f:
-                json.dump(packets, f, indent=4)
-            
-            print(f"Packets written to: {packets_file_path}")
-            
-        else:
-            print(f"File already exists: {packets_file_path}")
-
-
-        # Test packet stuff
-        cw1_packets = self.get_packets_for_file("cw1.pcap")
-        print(f"Packets from cw1.pcap: {len(cw1_packets)}")
-
-        print(f"Stored {len(packets)} packets for file: {file_name}")
-        print("Available files:", list(self.packets_by_file.keys()))
-        
     # Remove old charts
     def remove_old_chart(self):
         for i in reversed(range(self.layout.count())):
@@ -687,12 +768,12 @@ class DataOverview(QFrame):
             if widget and widget not in [self.title, self.loading_label, self.error_label, self.placeholder_label]:
                 widget.deleteLater()
     
-    def show_loading(self):
+    def show_loading(self, message="Loading packet data..."):
         """Show loading indicator"""
-        print("Showing loading indicator")
+        print(f"Showing loading indicator: {message}")
         self.placeholder_label.hide()
         self.error_label.hide()
-        self.loading_label.setText("Loading packet data...")
+        self.loading_label.setText(message)
         self.loading_label.show()
     
     def show_placeholder(self):
@@ -709,33 +790,6 @@ class DataOverview(QFrame):
         self.placeholder_label.hide()
         self.error_label.setText(f"Error loading packets: {error_message}")
         self.error_label.show()
-    
-    def on_packets_loaded(self, packets):
-        """Called when packets finish loading"""
-        print(f"on_packets_loaded called with {len(packets)} packets")
-        self.loading_label.hide()
-        
-        if not packets:
-            self.show_error("No packets found in file")
-            return
-        
-        # Add packet chart to layout
-        packet_chart = self.packet_chart(packets)
-        self.layout.addWidget(packet_chart)
-        
-        # Add packet count info
-        info_label = QLabel(f"Total packets: {len(packets)}")
-        info_label.setStyleSheet(f"""
-            color: {THEME['text_secondary']};
-            font-size: 12px;
-        """)
-        self.layout.insertWidget(1, info_label)
-    
-    def on_loading_error(self, error_message):
-        
-        # Called when loading fails
-        print(f"on_loading_error called: {error_message}")
-        self.show_error(error_message)
 
     def packet_chart(self, packets=None):
         
@@ -1105,7 +1159,7 @@ class OverviewDashBoard(QMainWindow):
         top_boxes_layout.addWidget(data_overview, alignment=Qt.AlignTop | Qt.AlignLeft)
         
         # Load chart when file selected
-        data_sources.fileSelected.connect(data_overview.load_packet_chart)
+        data_sources.fileSelected.connect(data_overview.display_chart_for_file)
 
         # Add stretch to push everything to the left
         top_boxes_layout.addStretch()
@@ -1122,6 +1176,9 @@ class OverviewDashBoard(QMainWindow):
         for root, dirs, files in os.walk(f"{self.path}/evidence"):
             for file in files:
                 file_list.append(os.path.join(root, file))
+
+        # Preload Pcap files
+        data_overview.preload_all_pcap_files(file_list)
 
         # Data source overview (left)
         source_overview = SourceOverview(file_list)

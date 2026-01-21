@@ -360,7 +360,7 @@ class CorrelationDashboard(QMainWindow):
 
         # Instantiate DataOverview for packet handeling and display 
         self.data_overview = DataOverview()
-
+        self.data_overview.handle_packets()
         self.data_overview.get_packets_for_file("cw1.pcap")
 
         # Build from the top down
