@@ -19,7 +19,7 @@ import shutil
 from collections import Counter
 from themes import DARK_THEME, LIGHT_THEME
 from mongoDBConnection import DatabaseHelper, DatabaseUploadThread
-
+import copy
 
 # Dark mode by default
 CURRENT_THEME = 'dark'
@@ -410,6 +410,11 @@ class PacketLoaderThread(QThread):
                     print(f"Error converting packet {idx}: {e}")
                     continue
             
+            # Tag packets with metadata before sending to UI thread
+            for pkt in packets:
+                pkt["source_file"] = file_name
+
+
             print(f"Finished parsing {len(packets)} packets from {file_name}")
             self.finished.emit(packets, file_name)
             
@@ -678,10 +683,6 @@ class DataOverview(QFrame):
         # Remove from loading set
         self.loading_files.discard(file_name)
         
-        # Tag packets with source file
-        for packet in packets:
-            packet["source_file"] = file_name
-        
         # Store packets
         self.packets_by_file[file_name] = packets
         
@@ -692,17 +693,20 @@ class DataOverview(QFrame):
         packets_file_path = os.path.join("packetFiles", f"{file_name}_packets.json")
         os.makedirs("packetFiles", exist_ok=True)
         
+        # Copy packets for caching
+        packets_to_cache = copy.deepcopy(packets)
+
         # Store packets locally
         try:
             with open(packets_file_path, "w", encoding="utf-8") as f:
-                json.dump(packets, f, indent=4)
+                json.dump(packets_to_cache, f, indent=4)
             print(f"Cached packets to: {packets_file_path}")
         except Exception as e:
             print(f"Error caching packets: {e}")
         
         # If this is the currently selected file, update display
         if self.current_file_path and os.path.basename(self.current_file_path) == file_name:
-            self.display_packets(packets)
+            self.display_packets(packets_to_cache)
     
     def on_file_error(self, error_message, file_name):
         """Called when a file fails to load"""
