@@ -19,26 +19,42 @@ except Exception as e:
 class DatabaseHelper():
     
     def __init__(self):
+        
         super().__init__()
+        
+        # Declare database variables
+        self.myclient = pymongo.MongoClient(uri)
+        self.mydb = self.myclient["PacketFileDatabase"]
+        self.mycol = self.mydb["PacketFiles"]
 
 
     def write_to_database(self, packets):
         # Write packets in chunks to the database
         try:
-            myclient = pymongo.MongoClient(uri)
-            mydb = myclient["PacketFileDatabase"]
-            mycol = mydb["PacketFiles"]
-
             batch_size = 5000  # safe batch size
 
             for i in range(0, len(packets), batch_size):
                 batch = packets[i:i + batch_size]
-                mycol.insert_many(batch)
+                self.mycol.insert_many(batch)
 
             print(f"Inserted {len(packets)} packets into MongoDB")
 
         except Exception as e:
             print("Error writing packets to database:", e)
+
+    # Grab data from the mongodb
+    def fetch_from_database(self):
+
+        try:
+
+            x = self.mycol.find_one()
+
+            print(x)
+
+        except Exception as e:
+
+            print(f"Error Fetching Data: {e}")
+
 
 
 # Handle large database upload in the background
@@ -60,5 +76,3 @@ class DatabaseUploadThread(QThread):
             self.finished.emit(self.file_name)
         except Exception as e:
             self.error.emit(str(e))
-
-

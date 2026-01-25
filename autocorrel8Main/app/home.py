@@ -955,10 +955,6 @@ class AutoCorrel8Dashboard(QMainWindow):
         top_nav.case_button.mousePressEvent = open_case_creation_popup
 
 
-        
-
-
-
 # Start the application 
 if __name__ == "__main__":
     app = QApplication(sys.argv)

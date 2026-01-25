@@ -19,7 +19,9 @@ import shutil
 from collections import Counter
 from themes import DARK_THEME, LIGHT_THEME
 from mongoDBConnection import DatabaseHelper, DatabaseUploadThread
+from correlationDash import CorrelationDashboard
 import copy
+from sharedWidgets import DataSources, ButtonLayout
 
 # Dark mode by default
 CURRENT_THEME = 'dark'
@@ -77,13 +79,24 @@ class TopNavBar(QFrame):
 
 
 class ButtonLayout(QFrame):
-    def __init__(self):
+    
+    def __init__(self, button1, button2, button3):
         super().__init__()
         self.setFixedHeight(75)
         layout = QHBoxLayout()
         layout.setContentsMargins(0, 10, 0, 10)
         layout.setSpacing(15)
+        self.button1 = button1
+        self.button2 = button2
+        self.button3 = button3
 
+        self.setStyleSheet("""
+            QFrame {
+                border: none;
+                background-color: transparent;
+            }
+        """)
+        
         button_style = f"""
             QPushButton {{
                 background-color: {THEME['button_bg']};
@@ -106,7 +119,7 @@ class ButtonLayout(QFrame):
         """
 
         # Add buttons
-        self.case_overview_button = QPushButton("Case Overview")
+        self.case_overview_button = QPushButton(button1)
         self.case_overview_button.setStyleSheet(button_style)
         self.case_overview_button.setFixedHeight(40)
         self.case_overview_button.setFixedWidth(120)
@@ -118,7 +131,7 @@ class ButtonLayout(QFrame):
         self.case_overview_button.setCursor(Qt.PointingHandCursor)
         layout.addWidget(self.case_overview_button)
 
-        self.add_source_button = QPushButton("Add Source")
+        self.add_source_button = QPushButton(button3)
         self.add_source_button.setStyleSheet(button_style)
         self.add_source_button.setFixedHeight(40)
         self.add_source_button.setFixedWidth(120)
@@ -128,7 +141,7 @@ class ButtonLayout(QFrame):
         
         layout.addWidget(self.add_source_button)
 
-        self.correlation_button = QPushButton("Correlation")
+        self.correlation_button = QPushButton(button2)
         self.correlation_button.setStyleSheet(button_style)
         self.correlation_button.setFixedHeight(40)
         self.correlation_button.setFixedWidth(120)
@@ -141,104 +154,6 @@ class ButtonLayout(QFrame):
     def add_source_clicked(self, function):
         self.add_source_button.clicked.connect(function)
 
-class DataSources(QFrame):
-
-    fileSelected = pyqtSignal(str)
-
-    def __init__(self, start_path=r"path"):
-        super().__init__()
-        self.setFixedHeight(400)
-        self.setFixedWidth(350)
-
-        layout = QVBoxLayout()
-        layout.setContentsMargins(15, 15, 15, 15)
-        layout.setSpacing(10)
-
-        # Title
-        title = QLabel("Data Sources")
-        title.setStyleSheet(f"""
-            color: {THEME['text_primary']};
-            font-size: 16px;
-            font-weight: bold;
-        """)
-        layout.addWidget(title)
-
-        # File explorer (QTreeView)
-        self.model = QFileSystemModel()
-        self.model.setReadOnly(True)
-
-        # If no path provided, use home directory
-        if start_path is None:
-            start_path = QDir.homePath()
-
-        self.model.setRootPath(start_path)
-
-        self.tree = QTreeView()
-        self.tree.setModel(self.model)
-        self.tree.setRootIndex(self.model.index(start_path))
-
-        self.tree.selectionModel().selectionChanged.connect(self._on_selection_changed)
-
-        self.tree.setStyleSheet(f"""
-            QTreeView {{
-                background-color: {THEME['surface']};
-                color: {THEME['text_primary']};
-                border: none;
-                outline: 0;
-            }}
-
-            QTreeView::item {{
-                color: {THEME['text_primary']};
-                padding: 2px 4px;
-            }}
-
-            QTreeView::item:selected {{
-                background-color: {THEME['accent']};
-                color: {THEME['text_primary']};
-            }}
-
-            /* Restore expand/collapse arrows */
-            QTreeView::branch:has-children:closed,
-            QTreeView::branch:closed:has-children:has-siblings {{
-                border-image: none;
-                image: url(icons/arrow-right.png);
-            }}
-
-            QTreeView::branch:has-children:open,
-            QTreeView::branch:open:has-children:has-siblings {{
-                border-image: none;
-                image: url(icons/arrow-down.png);
-            }}
-        """)
-
-
-        # Hide columns except the name 
-        self.tree.setHeaderHidden(True)
-        self.tree.setColumnHidden(1, True)  
-        self.tree.setColumnHidden(2, True)  
-        self.tree.setColumnHidden(3, True) 
-
-        layout.addWidget(self.tree)
-
-        # Frame styling
-        self.setStyleSheet(f"""
-            QFrame {{
-                background-color: {THEME['surface_elevated']};
-                border: 1px solid {THEME['border']};
-                border-radius: 6px;
-            }}
-        """)
-
-        self.setLayout(layout)
-
-    def _on_selection_changed(self, selected, deselected):
-        index = self.tree.currentIndex()
-        if not index.isValid():
-            return
-
-        path = self.model.filePath(index)
-        self.fileSelected.emit(path)
-        
 
 class SourceOverview(QFrame):
     
@@ -374,6 +289,7 @@ class PacketLoaderThread(QThread):
                 "-e", "http.request.method",  # HTTP method
                 "-e", "http.host",  # HTTP host
                 "-e", "tls.handshake.extensions_server_name",  # TLS SNI
+                "-Y", "dns.qry.name || http.host || tls.handshake.extensions_server_name"
             ]
             
             print(f"Running tshark command: {' '.join(cmd)}")
@@ -1147,8 +1063,22 @@ class OverviewDashBoard(QMainWindow):
         content_layout.setSpacing(15)  
            
         # Navigation Buttons
-        button_layout = ButtonLayout()
+        button_layout = ButtonLayout("Overview", "Correlation", "Add Source")
         content_layout.addWidget(button_layout, alignment=Qt.AlignTop | Qt.AlignLeft)
+
+        # Set current button to checked
+        button_layout.case_overview_button.setChecked(True)
+
+        # Switch screens
+        def show_correlation_dashboard():
+            self.correlation_dashboard = CorrelationDashboard(self.path)
+            self.correlation_dashboard.show()
+
+        # If correlation button is pressed switch to the correlation screen
+        button_layout.correlation_button.clicked.connect(
+            lambda: show_correlation_dashboard()
+        )
+
 
         # Create horizontal layout for DataSources and DataOverview
         top_boxes_layout = QHBoxLayout()
@@ -1174,7 +1104,11 @@ class OverviewDashBoard(QMainWindow):
         # Create horizontal layout for SourceOverview and InvestigatorNotes
         bottom_boxes_layout = QHBoxLayout()
         bottom_boxes_layout.setSpacing(15)
-        
+     
+        helperDB = DatabaseHelper()
+
+        helperDB.fetch_from_database()
+
         # Get list of evidence files in the case directory
         file_list = []
         for root, dirs, files in os.walk(f"{self.path}/evidence"):
