@@ -4,7 +4,7 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtCore import Qt 
 
-from sharedWidgets import ButtonLayout
+from sharedWidgets import ButtonLayout, TopNavBar
 from correlationSelection import CorrelationSelectionTable
 from themes import DARK_THEME, LIGHT_THEME
 import sys
@@ -16,56 +16,6 @@ import json
 # Dark mode by default
 CURRENT_THEME = 'dark'
 THEME = DARK_THEME if CURRENT_THEME == 'dark' else LIGHT_THEME
-
-# Top navigation bar
-class TopNavBar(QFrame):
-    def __init__(self):
-        super().__init__()
-        self.setStyleSheet(f"""
-            QFrame {{
-                background-color: {THEME['nav_bg']};
-                border-bottom: 1px solid {THEME['border']};
-            }}
-        """)
-        layout = QHBoxLayout()
-        layout.setContentsMargins(20, 0, 20, 0)
-        layout.setSpacing(40)
-
-        # Title label
-        title = QLabel("AutoCorrel8")
-        title.setStyleSheet(f"""
-            color: {THEME['accent']};
-            font-size: 20px;
-            font-weight: bold;
-            border: none;
-        """)
-        layout.addWidget(title)
-
-        # Cases button
-        self.case_button = QLabel("Cases")
-        self.case_button.setStyleSheet(f"""
-            color: {THEME['text_primary']};
-            font-size: 14px;
-            border: none;
-            padding: 5px 10px;
-        """)
-        self.case_button.setCursor(Qt.PointingHandCursor)
-        layout.addWidget(self.case_button)
-    
-        # Tool information button
-        self.tool_info_button = QLabel("Tool Information")
-        self.tool_info_button.setStyleSheet(f"""
-            color: {THEME['text_primary']};
-            font-size: 14px;
-            border: none;
-            padding: 5px 10px;
-        """)
-        self.tool_info_button.setCursor(Qt.PointingHandCursor)
-        layout.addWidget(self.tool_info_button)
-
-        layout.addStretch()
-        self.setLayout(layout)
-
 
 # Correlation Dashboard Main Window
 class CorrelationDashboard(QMainWindow):
@@ -103,6 +53,9 @@ class CorrelationDashboard(QMainWindow):
         button_layout = ButtonLayout("Overview", "Correlation", "Add Source")
         content_layout.addWidget(button_layout, alignment=Qt.AlignTop | Qt.AlignLeft)
 
+        # Set button state
+        button_layout.correlation_button.setChecked(True)
+        
         # Import Correlation Engine
         self.correlation_engine = CorrelationEngine()
 

@@ -2,7 +2,7 @@ from themes import THEME
 
 from PyQt5.QtWidgets import (
      QLabel, 
-    QPushButton, QVBoxLayout, QHBoxLayout, QFrame, QFileSystemModel, QTreeView
+    QPushButton, QVBoxLayout, QHBoxLayout, QFrame, QFileSystemModel, QTreeView, QButtonGroup
 )
 
 from PyQt5.QtCore import Qt, QDir, pyqtSignal
@@ -148,38 +148,73 @@ class ButtonLayout(QFrame):
             }}
         """
 
+        group = QButtonGroup(self)
+        group.setExclusive(True)
+
         # Add buttons
         self.case_overview_button = QPushButton(button1)
-        self.case_overview_button.setStyleSheet(button_style)
-        self.case_overview_button.setFixedHeight(40)
-        self.case_overview_button.setFixedWidth(120)
-        self.case_overview_button.setCheckable(True)
-        
-        # Case overview checked by default
-        self.case_overview_button.setChecked(True)
+        self.correlation_button = QPushButton(button2)
+        self.add_source_button = QPushButton(button3)
 
-        self.case_overview_button.setCursor(Qt.PointingHandCursor)
-        layout.addWidget(self.case_overview_button)
-
-        self.add_source_button = QPushButton(button2)
-        self.add_source_button.setStyleSheet(button_style)
-        self.add_source_button.setFixedHeight(40)
-        self.add_source_button.setFixedWidth(120)
-        self.add_source_button.setCheckable(True)
-        self.add_source_button.setCursor(Qt.PointingHandCursor)
-        
-        
-        layout.addWidget(self.add_source_button)
-
-        self.correlation_button = QPushButton(button3)
-        self.correlation_button.setStyleSheet(button_style)
-        self.correlation_button.setFixedHeight(40)
-        self.correlation_button.setFixedWidth(120)
-        self.correlation_button.setCheckable(True)
-        self.correlation_button.setCursor(Qt.PointingHandCursor)
-        layout.addWidget(self.correlation_button)
-
+        # Add buttons to layout
+        for btn in (self.case_overview_button, self.correlation_button, self.add_source_button):
+            btn.setCheckable(True)
+            btn.setFixedSize(120, 40)
+            btn.setCursor(Qt.PointingHandCursor)
+            btn.setStyleSheet(button_style)
+            layout.addWidget(btn)
+            group.addButton(btn)
+      
         self.setLayout(layout)
 
     def add_source_clicked(self, function):
         self.add_source_button.clicked.connect(function)
+
+# Top navigation bar
+class TopNavBar(QFrame):
+    def __init__(self):
+        super().__init__()
+        self.setStyleSheet(f"""
+            QFrame {{
+                background-color: {THEME['nav_bg']};
+                border-bottom: 1px solid {THEME['border']};
+            }}
+        """)
+        layout = QHBoxLayout()
+        layout.setContentsMargins(20, 0, 20, 0)
+        layout.setSpacing(40)
+
+        # Title label
+        title = QLabel("AutoCorrel8")
+        title.setStyleSheet(f"""
+            color: {THEME['accent']};
+            font-size: 20px;
+            font-weight: bold;
+            border: none;
+        """)
+        layout.addWidget(title)
+
+        # Cases button
+        self.case_button = QLabel("Cases")
+        self.case_button.setStyleSheet(f"""
+            color: {THEME['text_primary']};
+            font-size: 14px;
+            border: none;
+            padding: 5px 10px;
+        """)
+        self.case_button.setCursor(Qt.PointingHandCursor)
+        layout.addWidget(self.case_button)
+    
+        # Tool information button
+        self.tool_info_button = QLabel("Tool Information")
+        self.tool_info_button.setStyleSheet(f"""
+            color: {THEME['text_primary']};
+            font-size: 14px;
+            border: none;
+            padding: 5px 10px;
+        """)
+        self.tool_info_button.setCursor(Qt.PointingHandCursor)
+        layout.addWidget(self.tool_info_button)
+
+        layout.addStretch()
+        self.setLayout(layout)

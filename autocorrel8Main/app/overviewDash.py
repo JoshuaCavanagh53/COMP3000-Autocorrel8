@@ -21,138 +21,11 @@ from themes import DARK_THEME, LIGHT_THEME
 from mongoDBConnection import DatabaseHelper, DatabaseUploadThread
 from correlationDash import CorrelationDashboard
 import copy
-from sharedWidgets import DataSources, ButtonLayout
+from sharedWidgets import DataSources, ButtonLayout, TopNavBar
 
 # Dark mode by default
 CURRENT_THEME = 'dark'
 THEME = DARK_THEME if CURRENT_THEME == 'dark' else LIGHT_THEME
-
-
-# Top navigation bar
-class TopNavBar(QFrame):
-    def __init__(self):
-        super().__init__()
-        self.setStyleSheet(f"""
-            QFrame {{
-                background-color: {THEME['nav_bg']};
-                border-bottom: 1px solid {THEME['border']};
-            }}
-        """)
-        layout = QHBoxLayout()
-        layout.setContentsMargins(20, 0, 20, 0)
-        layout.setSpacing(40)
-
-        # Title label
-        title = QLabel("AutoCorrel8")
-        title.setStyleSheet(f"""
-            color: {THEME['accent']};
-            font-size: 20px;
-            font-weight: bold;
-            border: none;
-        """)
-        layout.addWidget(title)
-
-        # Cases button
-        self.case_button = QLabel("Cases")
-        self.case_button.setStyleSheet(f"""
-            color: {THEME['text_primary']};
-            font-size: 14px;
-            border: none;
-            padding: 5px 10px;
-        """)
-        self.case_button.setCursor(Qt.PointingHandCursor)
-        layout.addWidget(self.case_button)
-    
-        # Tool information button
-        self.tool_info_button = QLabel("Tool Information")
-        self.tool_info_button.setStyleSheet(f"""
-            color: {THEME['text_primary']};
-            font-size: 14px;
-            border: none;
-            padding: 5px 10px;
-        """)
-        self.tool_info_button.setCursor(Qt.PointingHandCursor)
-        layout.addWidget(self.tool_info_button)
-
-        layout.addStretch()
-        self.setLayout(layout)
-
-
-class ButtonLayout(QFrame):
-    
-    def __init__(self, button1, button2, button3):
-        super().__init__()
-        self.setFixedHeight(75)
-        layout = QHBoxLayout()
-        layout.setContentsMargins(0, 10, 0, 10)
-        layout.setSpacing(15)
-        self.button1 = button1
-        self.button2 = button2
-        self.button3 = button3
-
-        self.setStyleSheet("""
-            QFrame {
-                border: none;
-                background-color: transparent;
-            }
-        """)
-        
-        button_style = f"""
-            QPushButton {{
-                background-color: {THEME['button_bg']};
-                color: {THEME['text_primary']};
-                border: 1px solid {THEME['border']};
-                border-radius: 4px;
-                padding: 10px 10px;
-                font-size: 13px;
-                font-weight: 500;
-            }}
-            QPushButton:checked {{
-                border: 2px solid {THEME['accent']};
-                background-color: {THEME['button_checked']};
-                color: {THEME['accent']};
-            }}
-            QPushButton:hover {{
-                background-color: {THEME['surface_elevated']};
-                border: 1px solid {THEME['accent']};
-            }}
-        """
-
-        # Add buttons
-        self.case_overview_button = QPushButton(button1)
-        self.case_overview_button.setStyleSheet(button_style)
-        self.case_overview_button.setFixedHeight(40)
-        self.case_overview_button.setFixedWidth(120)
-        self.case_overview_button.setCheckable(True)
-        
-        # Case overview checked by default
-        self.case_overview_button.setChecked(True)
-
-        self.case_overview_button.setCursor(Qt.PointingHandCursor)
-        layout.addWidget(self.case_overview_button)
-
-        self.add_source_button = QPushButton(button3)
-        self.add_source_button.setStyleSheet(button_style)
-        self.add_source_button.setFixedHeight(40)
-        self.add_source_button.setFixedWidth(120)
-        self.add_source_button.setCheckable(True)
-        self.add_source_button.setCursor(Qt.PointingHandCursor)
-        
-        
-        layout.addWidget(self.add_source_button)
-
-        self.correlation_button = QPushButton(button2)
-        self.correlation_button.setStyleSheet(button_style)
-        self.correlation_button.setFixedHeight(40)
-        self.correlation_button.setFixedWidth(120)
-        self.correlation_button.setCheckable(True)
-        self.correlation_button.setCursor(Qt.PointingHandCursor)
-        layout.addWidget(self.correlation_button)
-
-        self.setLayout(layout)
-
-    def add_source_clicked(self, function):
-        self.add_source_button.clicked.connect(function)
 
 
 class SourceOverview(QFrame):
@@ -1066,7 +939,7 @@ class OverviewDashBoard(QMainWindow):
         button_layout = ButtonLayout("Overview", "Correlation", "Add Source")
         content_layout.addWidget(button_layout, alignment=Qt.AlignTop | Qt.AlignLeft)
 
-        # Set current button to checked
+        # Set button states
         button_layout.case_overview_button.setChecked(True)
 
         # Switch screens

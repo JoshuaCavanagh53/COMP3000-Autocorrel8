@@ -808,7 +808,7 @@ class FileUploadPopup(QFrame):
 
     def open_new_screen(self):
             current_case_path = self.case_folder
-            self.new_window = CorrelationDashBoard(current_case_path)
+            self.new_window = OverviewDashBoard(current_case_path)
             self.new_window.show()
             self.close()
 
