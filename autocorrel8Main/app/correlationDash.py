@@ -103,7 +103,7 @@ class CorrelationDashboard(QMainWindow):
         )
 
         # Update Visualization
-        self.correlation_view.timeline_widget.load_timeline_data(timeline_data)
+        self.correlation_view.load_timeline_data(timeline_data)
 
         # Show correlation view
         self.correlation_view.show()
