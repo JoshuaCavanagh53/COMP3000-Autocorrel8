@@ -1,11 +1,12 @@
-from ctypes import alignment
-from PyQt5.QtWidgets import ( QWidget, QLabel, 
-    QPushButton, QVBoxLayout, QHBoxLayout, QFrame,
-   QScrollArea,  QComboBox,  QLabel, QSlider, QTableWidget, QHeaderView, QTableWidgetItem
+from PyQt5.QtWidgets import (
+    QWidget, QLabel, QPushButton, QVBoxLayout, QHBoxLayout, QFrame,
+    QScrollArea, QComboBox, QSlider, QTableWidget, QHeaderView, 
+    QTableWidgetItem, QCheckBox
 )
 from PyQt5.QtCore import Qt, QRect, QPoint, QTimer
-from PyQt5.QtGui import QPainter, QColor, QPen, QBrush, QFont
-from datetime import  timedelta
+from PyQt5.QtGui import QPainter, QColor, QPen, QBrush, QFont, QWheelEvent
+from datetime import timedelta
+from collections import defaultdict
 
 from themes import THEME
 
@@ -17,8 +18,102 @@ class TimelineEvent:
         self.value = value
         self.pcap_name = pcap_name
         self.x_pos = 0
+        self.normalized_ts = 0
 
-# Timeline for a single PCAP file
+
+# Event cluster for grouping nearby events
+class EventCluster:
+    def __init__(self, events, x_start, x_end):
+        self.events = events
+        self.x_start = x_start
+        self.x_end = x_end
+        self.x_center = (x_start + x_end) // 2
+        self.count = len(events)
+
+
+# Minimap widget showing full timeline overview
+class TimelineMinimap(QWidget):
+    def __init__(self, start_time, end_time, height=40):
+        super().__init__()
+        self.start_time = start_time
+        self.end_time = end_time
+        self.setFixedHeight(height)
+        self.setMinimumWidth(400)
+        self.visible_start = 0.0
+        self.visible_end = 1.0
+        self.dragging = False
+        self.drag_start_x = 0
+        self.setMouseTracking(True)
+        self.setCursor(Qt.PointingHandCursor)
+        
+    # Get the full visible range of the timeline
+    def set_visible_range(self, start_pct, end_pct):
+        self.visible_start = max(0.0, min(1.0, start_pct))
+        self.visible_end = max(0.0, min(1.0, end_pct))
+        self.update()
+    
+    # Paint the minimap above the timelines
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        
+        painter.fillRect(self.rect(), QColor(THEME['timeline_bg']))
+        
+        painter.setPen(QPen(QColor(THEME['border']), 1))
+        painter.drawRect(0, 0, self.width()-1, self.height()-1)
+        
+        bar_y = self.height() // 2
+        painter.setPen(QPen(QColor(THEME['border']), 2))
+        painter.drawLine(10, bar_y, self.width() - 10, bar_y)
+        
+        bar_width = self.width() - 20
+        visible_x1 = 10 + int(bar_width * self.visible_start)
+        visible_x2 = 10 + int(bar_width * self.visible_end)
+        
+        painter.fillRect(visible_x1, bar_y - 8, visible_x2 - visible_x1, 16, 
+                        QColor(THEME['accent']).lighter(150))
+        painter.setPen(QPen(QColor(THEME['accent']), 2))
+        painter.drawRect(visible_x1, bar_y - 8, visible_x2 - visible_x1, 16)
+        
+        painter.setPen(QColor(THEME['text_secondary']))
+        font = QFont()
+        font.setPointSize(7)
+        painter.setFont(font)
+        
+        start_str = self.start_time.strftime("%Y-%m-%d %H:%M:%S")
+        end_str = self.end_time.strftime("%Y-%m-%d %H:%M:%S")
+        
+        painter.drawText(QRect(10, 0, 150, bar_y - 10), 
+                        Qt.AlignLeft | Qt.AlignBottom, start_str)
+        painter.drawText(QRect(self.width() - 160, 0, 150, bar_y - 10), 
+                        Qt.AlignRight | Qt.AlignBottom, end_str)
+    
+    # Check if the user is dragging the timeline scroller
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self.dragging = True
+            self.drag_start_x = event.x()
+            self._jump_to_position(event.x())
+    
+    def mouseMoveEvent(self, event):
+        if self.dragging:
+            self._jump_to_position(event.x())
+    
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self.dragging = False
+    
+    # Move timeline view to the scrolled location 
+    def _jump_to_position(self, x):
+        bar_width = self.width() - 20
+        clicked_pct = (x - 10) / bar_width
+        clicked_pct = max(0.0, min(1.0, clicked_pct))
+        
+        if hasattr(self.parent(), 'jump_to_position'):
+            self.parent().jump_to_position(clicked_pct)
+
+
+# Optimized timeline with clustering
 class PCAPTimeline(QWidget):
     def __init__(self, pcap_name, events, start_time, end_time, height=120, pixels_per_second=50):
         super().__init__()
@@ -29,16 +124,22 @@ class PCAPTimeline(QWidget):
         self.timeline_height = height
         self.highlighted_events = []
         self.pixels_per_second = pixels_per_second
+        self.hovered_event = None
+        self.hovered_cluster = None
+        self.clusters = []
+        self.use_clustering = True
+        self.cluster_threshold = 15  # Events within 15 pixels of each other get clustered
+        
         self.setMinimumHeight(height)
         self.setMaximumHeight(height)
+        self.setMouseTracking(True)
 
-        # Calculate required width based on time span
         total_duration = (self.end_time - self.start_time).total_seconds()
         required_width = int(total_duration * self.pixels_per_second) + 200
         self.setMinimumWidth(required_width)
 
-        # Calculate event position
         self._calculate_event_positions()
+        self._create_clusters()
 
     def _calculate_event_positions(self):
         if not self.events:
@@ -49,26 +150,88 @@ class PCAPTimeline(QWidget):
             return
         
         for event in self.events:
-            elapsed = event.normalized_ts
+            elapsed = (event.timestamp - self.start_time).total_seconds()
             event.x_pos = 100 + int(elapsed * self.pixels_per_second)
 
-    def set_highlighted_events(self, events):
+    def _create_clusters(self):
         
-        # Set which events should be highlighted
+        # Group nearby events into clusters to reduce rendering load
+        if not self.events or not self.use_clustering:
+            self.clusters = []
+            return
+        
+        # Sort events by x position
+        sorted_events = sorted(self.events, key=lambda e: e.x_pos)
+        
+        self.clusters = []
+        current_cluster_events = [sorted_events[0]]
+        cluster_start = sorted_events[0].x_pos
+        
+        for event in sorted_events[1:]:
+            # If event is close to last event in the cluster, add to cluster
+            if event.x_pos - current_cluster_events[-1].x_pos <= self.cluster_threshold:
+                current_cluster_events.append(event)
+            else:
+                # Create cluster from accumulated events
+                if len(current_cluster_events) > 1:
+                    cluster_end = current_cluster_events[-1].x_pos
+                    self.clusters.append(EventCluster(current_cluster_events, cluster_start, cluster_end))
+                else:
+                    # Single event is not part of a cluster
+                    pass
+                
+                # Start new cluster
+                current_cluster_events = [event]
+                cluster_start = event.x_pos
+        
+        # Handle last cluster
+        if len(current_cluster_events) > 1:
+            cluster_end = current_cluster_events[-1].x_pos
+            self.clusters.append(EventCluster(current_cluster_events, cluster_start, cluster_end))
+
+    def set_highlighted_events(self, events):
         self.highlighted_events = events if events else []
-        self.update()  # Trigger repaint
+        self.update()
 
     def clear_highlights(self):
-        
-        # Remove all highlights
         self.highlighted_events = []
-        self.update()  # Trigger repaint
+        self.update()
+
+    def mouseMoveEvent(self, event):
+        mouse_x = event.x()
+        
+        # Check clusters first
+        self.hovered_cluster = None
+        for cluster in self.clusters:
+            if cluster.x_start - 10 <= mouse_x <= cluster.x_end + 10:
+                self.hovered_cluster = cluster
+                self.hovered_event = None
+                self.update()
+                return
+        
+        # Check individual events
+        self.hovered_event = None
+        for ev in self.events:
+            # Only check events not in clusters or highlighted
+            if ev in self.highlighted_events or any(ev in c.events for c in self.clusters):
+                if ev in self.highlighted_events and abs(ev.x_pos - mouse_x) < 10:
+                    self.hovered_event = ev
+                    break
+            elif abs(ev.x_pos - mouse_x) < 10:
+                self.hovered_event = ev
+                break
+        
+        self.update()
+
+    def leaveEvent(self, event):
+        self.hovered_event = None
+        self.hovered_cluster = None
+        self.update()
 
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
         
-        # Draw background
         painter.fillRect(self.rect(), QColor(THEME['timeline_bg']))
         
         # Draw PCAP name
@@ -84,51 +247,180 @@ class PCAPTimeline(QWidget):
         painter.setPen(QPen(QColor(THEME['border']), 2))
         painter.drawLine(100, timeline_y, self.width() - 20, timeline_y)
         
-        # Draw events
-        for event in self.events:
-            # Check if this event should be highlighted
-            if event in self.highlighted_events:
-                # Draw highlighted event
-                self._draw_highlighted_event(painter, event, timeline_y)
+        # Get visible region for culling
+        viewport_rect = self.visibleRegion().boundingRect()
+        
+        # Draw clusters first
+        for cluster in self.clusters:
+            # Cull offscreen clusters
+            if cluster.x_end < viewport_rect.left() - 50 or cluster.x_start > viewport_rect.right() + 50:
+                continue
+            
+            is_hovered = cluster == self.hovered_cluster
+            self._draw_cluster(painter, cluster, timeline_y, is_hovered)
+        
+        # Draw individual events 
+        clustered_events = set()
+        for cluster in self.clusters:
+            clustered_events.update(cluster.events)
+        
+        for ev in self.events:
+            # Remove offscreen events
+            if ev.x_pos < viewport_rect.left() - 50 or ev.x_pos > viewport_rect.right() + 50:
+                continue
+            
+            # Skip events that are in clusters 
+            if ev in clustered_events and ev not in self.highlighted_events:
+                continue
+            
+            is_highlighted = ev in self.highlighted_events
+            is_hovered = ev == self.hovered_event
+            
+            if is_highlighted:
+                self._draw_highlighted_event(painter, ev, timeline_y)
+            elif is_hovered:
+                self._draw_hovered_event(painter, ev, timeline_y)
             else:
-                # Draw normal event
-                color = self._get_event_color(event.event_type)
+                color = self._get_event_color(ev.event_type)
                 painter.setBrush(QBrush(QColor(color)))
                 painter.setPen(QPen(QColor(color), 1))
-                
-                # Draw event marker (circle)
-                painter.drawEllipse(event.x_pos - 4, timeline_y - 4, 8, 8)
+                painter.drawEllipse(ev.x_pos - 4, timeline_y - 4, 8, 8)
+        
+        # Draw tooltips last
+        if self.hovered_event:
+            self._draw_tooltip(painter, self.hovered_event)
+        elif self.hovered_cluster:
+            self._draw_cluster_tooltip(painter, self.hovered_cluster)
+
+    def _draw_cluster(self, painter, cluster, timeline_y, is_hovered):
+        
+        # Draw a cluster of events as a bar
+        # Calculate cluster width
+        width = max(8, cluster.x_end - cluster.x_start)
+        
+        # Choose color based on hover state
+        if is_hovered:
+            color = QColor(THEME['accent']).lighter(130)
+            border_color = QColor(THEME['accent'])
+            border_width = 2
+        else:
+            color = QColor(THEME['text_secondary']).darker(150)
+            border_color = QColor(THEME['border'])
+            border_width = 1
+        
+        # Draw cluster bar
+        painter.setBrush(QBrush(color))
+        painter.setPen(QPen(border_color, border_width))
+        painter.drawRect(cluster.x_start - 2, timeline_y - 8, width + 4, 16)
+        
+        # Draw event count if hovered
+        if is_hovered:
+            painter.setPen(QColor(THEME['text_primary']))
+            font = QFont()
+            font.setPointSize(8)
+            font.setBold(True)
+            painter.setFont(font)
+            count_text = str(cluster.count)
+            painter.drawText(QRect(cluster.x_start - 10, timeline_y - 25, width + 20, 15),
+                           Qt.AlignCenter, count_text)
+
+    def _draw_cluster_tooltip(self, painter, cluster):
+        
+        # Draw tooltip for event cluster
+
+        tooltip_text = f"Event Cluster\n{cluster.count} events\nClick to see details"
+        
+        font = QFont()
+        font.setPointSize(9)
+        painter.setFont(font)
+        metrics = painter.fontMetrics()
+        
+        lines = tooltip_text.split('\n')
+        max_width = max(metrics.horizontalAdvance(line) for line in lines)
+        line_height = metrics.height()
+        tooltip_height = line_height * len(lines) + 10
+        tooltip_width = max_width + 20
+        
+        tooltip_x = cluster.x_center - tooltip_width // 2
+        tooltip_y = 10
+        
+        tooltip_x = max(10, min(tooltip_x, self.width() - tooltip_width - 10))
+        
+        painter.setBrush(QBrush(QColor(THEME['surface_elevated'])))
+        painter.setPen(QPen(QColor(THEME['accent']), 2))
+        painter.drawRoundedRect(tooltip_x, tooltip_y, tooltip_width, tooltip_height, 4, 4)
+        
+        painter.setPen(QColor(THEME['text_primary']))
+        y_offset = tooltip_y + line_height
+        for line in lines:
+            painter.drawText(QRect(tooltip_x + 10, y_offset - line_height + 5, 
+                                  tooltip_width - 20, line_height), 
+                           Qt.AlignLeft | Qt.AlignVCenter, line)
+            y_offset += line_height
     
     def _draw_highlighted_event(self, painter, event, timeline_y):
-        
-        # Draw a highlighted event marker
         highlight_color = QColor("#ffdd00")  
         painter.setBrush(QBrush(highlight_color))
         painter.setPen(QPen(highlight_color.darker(120), 2))
-        painter.drawEllipse(event.x_pos - 7, timeline_y - 7, 14, 14)  
+        painter.drawEllipse(event.x_pos - 7, timeline_y - 7, 14, 14)
+
+    def _draw_hovered_event(self, painter, event, timeline_y):
+        color = self._get_event_color(event.event_type)
+        painter.setBrush(QBrush(QColor(color).lighter(130)))
+        painter.setPen(QPen(QColor(color).lighter(150), 2))
+        painter.drawEllipse(event.x_pos - 6, timeline_y - 6, 12, 12)
+
+    def _draw_tooltip(self, painter, event):
+        time_str = event.timestamp.strftime("%H:%M:%S.%f")[:-3]
+        tooltip_text = f"{event.event_type.upper()}: {event.value}\nTime: {time_str}"
         
-      
+        font = QFont()
+        font.setPointSize(9)
+        painter.setFont(font)
+        metrics = painter.fontMetrics()
+        
+        lines = tooltip_text.split('\n')
+        max_width = max(metrics.horizontalAdvance(line) for line in lines)
+        line_height = metrics.height()
+        tooltip_height = line_height * len(lines) + 10
+        tooltip_width = max_width + 20
+        
+        tooltip_x = event.x_pos - tooltip_width // 2
+        tooltip_y = 10
+        
+        tooltip_x = max(10, min(tooltip_x, self.width() - tooltip_width - 10))
+        
+        painter.setBrush(QBrush(QColor(THEME['surface_elevated'])))
+        painter.setPen(QPen(QColor(THEME['accent']), 2))
+        painter.drawRoundedRect(tooltip_x, tooltip_y, tooltip_width, tooltip_height, 4, 4)
+        
+        painter.setPen(QColor(THEME['text_primary']))
+        y_offset = tooltip_y + line_height
+        for line in lines:
+            painter.drawText(QRect(tooltip_x + 10, y_offset - line_height + 5, 
+                                  tooltip_width - 20, line_height), 
+                           Qt.AlignLeft | Qt.AlignVCenter, line)
+            y_offset += line_height
 
     def _get_event_color(self, event_type):
         colors = {
             'domain': THEME['event_domain'],
             'ip': THEME['event_ip'],
             'port': THEME['event_port'],
+            'protocol': THEME.get('event_protocol', THEME['accent']),
         }
         return colors.get(event_type, THEME['accent'])
 
 
-# Timestamp axis widget
+# Enhanced timestamp axis
 class TimestampAxis(QWidget):
-    def __init__(self, start_time, end_time, height=30, pixels_per_second=50):
+    def __init__(self, start_time, end_time, height=40, pixels_per_second=50):
         super().__init__()
         self.start_time = start_time
         self.end_time = end_time
         self.pixels_per_second = pixels_per_second
-        self.setMinimumHeight(height)
-        self.setMaximumHeight(height)
+        self.setFixedHeight(height)
         
-        # Calculate required width
         total_duration = (self.end_time - self.start_time).total_seconds()
         required_width = int(total_duration * self.pixels_per_second) + 200
         self.setMinimumWidth(required_width)
@@ -137,52 +429,73 @@ class TimestampAxis(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
         
-        # Draw background
         painter.fillRect(self.rect(), QColor(THEME['timeline_bg']))
         
-        # Set font
         font = QFont()
         font.setPointSize(8)
         painter.setFont(font)
-        painter.setPen(QColor(THEME['text_secondary']))
         
-        # Calculate time markers
         total_duration = (self.end_time - self.start_time).total_seconds()
         
-        # Determine appropriate interval based on duration
+        # Get visible region
+        viewport_rect = self.visibleRegion().boundingRect()
+        
         if total_duration <= 60:
             interval = 5
             time_format = "%H:%M:%S"
-        elif total_duration <= 600:
+        elif total_duration <= 300:
             interval = 30
             time_format = "%H:%M:%S"
-        elif total_duration <= 3600:
+        elif total_duration <= 1800:
             interval = 60
             time_format = "%H:%M:%S"
-        else:
+        elif total_duration <= 3600:
             interval = 300
             time_format = "%H:%M:%S"
+        elif total_duration <= 86400:
+            interval = 1800
+            time_format = "%H:%M"
+        else:
+            interval = 3600
+            time_format = "%m/%d %H:%M"
         
-        # Draw time markers
+        # Only draw visible markers
         current_time = self.start_time
         while current_time <= self.end_time:
             elapsed = (current_time - self.start_time).total_seconds()
             x_pos = 100 + int(elapsed * self.pixels_per_second)
             
-            # Draw tick mark
-            painter.setPen(QPen(QColor(THEME['border']), 1))
-            painter.drawLine(x_pos, 5, x_pos, 15)
+            # Cull offscreen markers
+            if x_pos < viewport_rect.left() - 100 or x_pos > viewport_rect.right() + 100:
+                current_time += timedelta(seconds=interval)
+                continue
             
-            # Draw time label
-            painter.setPen(QColor(THEME['text_secondary']))
+            painter.setPen(QPen(QColor(THEME['text_primary']), 2))
+            painter.drawLine(x_pos, 5, x_pos, 20)
+            
+            painter.setPen(QColor(THEME['text_primary']))
             time_str = current_time.strftime(time_format)
-            painter.drawText(QRect(x_pos - 40, 15, 80, 15), 
+            painter.drawText(QRect(x_pos - 50, 20, 100, 18), 
                            Qt.AlignCenter, time_str)
             
             current_time += timedelta(seconds=interval)
+        
+        # Draw minor ticks
+        minor_interval = interval / 5
+        current_time = self.start_time
+        painter.setPen(QPen(QColor(THEME['border']), 1))
+        
+        while current_time <= self.end_time:
+            elapsed = (current_time - self.start_time).total_seconds()
+            x_pos = 100 + int(elapsed * self.pixels_per_second)
+            
+            if viewport_rect.left() - 50 <= x_pos <= viewport_rect.right() + 50:
+                painter.drawLine(x_pos, 10, x_pos, 15)
+            
+            current_time += timedelta(seconds=minor_interval)
 
 
-# Overlay widget for drawing correlation lines on top
+# Optimized overlay with correlation limiting
 class CorrelationOverlay(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -190,16 +503,13 @@ class CorrelationOverlay(QWidget):
         self.pcap_timelines = []
         self.scroll_area = None
         self._initialized = False
+        self.max_visible_lines = 100  # Limit correlation lines drawn
         
-        # Make the widget transparent to mouse events
         self.setAttribute(Qt.WA_TransparentForMouseEvents)
-        # Make background transparent
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.setStyleSheet("background: transparent;")
     
     def set_data(self, correlations, pcap_timelines, scroll_area):
-        
-        # Update the correlation data and trigger repaint
         self.correlations = correlations if correlations else []
         self.pcap_timelines = pcap_timelines if pcap_timelines else []
         self.scroll_area = scroll_area
@@ -207,33 +517,31 @@ class CorrelationOverlay(QWidget):
         self.update()
     
     def paintEvent(self, event):
-
-        # Draw correlation lines
-        # Safety checks
-        if not self._initialized:
+        if not self._initialized or not self.correlations:
             return
-        if not self.correlations:
-            return
-        if not self.scroll_area:
-            return
-        if not self.pcap_timelines:
+        if not self.scroll_area or not self.pcap_timelines:
             return
         
         try:
             painter = QPainter(self)
             painter.setRenderHint(QPainter.Antialiasing)
             
-            # Draw correlation lines
             pen = QPen(QColor(THEME.get('correlation_line', '#FF6B6B')), 2, Qt.DashLine)
             painter.setPen(pen)
             
-            # Get scroll offset safely
             h_scrollbar = self.scroll_area.horizontalScrollBar()
             scroll_offset = h_scrollbar.value() if h_scrollbar else 0
             
+            # Get viewport for culling
+            viewport_rect = self.rect()
+            
+            lines_drawn = 0
             for event1, event2, time_diff in self.correlations:
+                # Limit total lines drawn
+                if lines_drawn >= self.max_visible_lines:
+                    break
+                
                 try:
-                    # Find the timeline widgets for these events
                     timeline1 = next((t for t in self.pcap_timelines if t.pcap_name == event1.pcap_name), None)
                     timeline2 = next((t for t in self.pcap_timelines if t.pcap_name == event2.pcap_name), None)
                     
@@ -243,23 +551,23 @@ class CorrelationOverlay(QWidget):
                     if not timeline1.isVisible() or not timeline2.isVisible():
                         continue
                     
-                    # Get positions in timeline coordinates
                     x1 = event1.x_pos - scroll_offset
+                    x2 = event2.x_pos - scroll_offset
+                    
+                    # Cull offscreen lines
+                    if (x1 < -50 and x2 < -50) or (x1 > viewport_rect.width() + 50 and x2 > viewport_rect.width() + 50):
+                        continue
+                    
                     y1_widget = timeline1.mapTo(self.parent(), QPoint(0, timeline1.height() // 2))
                     y1 = y1_widget.y()
 
-                    x2 = event2.x_pos - scroll_offset
                     y2_widget = timeline2.mapTo(self.parent(), QPoint(0, timeline2.height() // 2))
                     y2 = y2_widget.y()
-
-                    
-                    # Only draw if at least one point is visible
           
                     painter.drawLine(x1, y1, x2, y2)
+                    lines_drawn += 1
                         
                 except Exception as e:
-                    # Skip this correlation if there's an error
-                    print(f"Error drawing correlation line: {e}")
                     continue
                     
         except Exception as e:
@@ -272,74 +580,16 @@ class CrossPCAPTimelineWidget(QFrame):
         self.pcap_timelines = []
         self.timestamp_axis = None
         self.correlations = []
+        self.all_correlations = []  # Store all before filtering
         self.filter_type = 'domain'
         self.time_threshold = 5.0
         self.pixels_per_second = 50
         self.overlay = None
-        self.selected_events = []
+        self.minimap = None
+        self.start_time = None
+        self.end_time = None
+        self.max_correlations = 500  # Limit correlations shown
         
-        # Secure domains
-        self.safe_domains = [
-            # Operating system & update infrastructure
-            "windowsupdate.com",
-            "microsoft.com",
-            "msftncsi.com",
-            "apple.com",
-            "icloud.com",
-            "ubuntu.com",
-            "canonical.com",
-
-            # DNS providers
-            "google.com",
-            "googleapis.com",
-            "gstatic.com",
-            "cloudflare.com",
-            "cloudflare-dns.com",
-            "quad9.net",
-            "opendns.com",
-
-            # CDNs
-            "akamai.net",
-            "akamaihd.net",
-            "fastly.net",
-            "cloudfront.net",
-            "edgesuite.net",
-            "cdn.jsdelivr.net",
-
-            # Browsers & search engines
-            "bing.com",
-            "duckduckgo.com",
-            "mozilla.org",
-            "firefox.com",
-            "chrome.com",
-
-            # Cloud platforms
-            "amazonaws.com",
-            "azure.com",
-            "azureedge.net",
-            "googleusercontent.com",
-            "dropbox.com",
-
-            # Time sync
-            "ntp.org",
-            "pool.ntp.org",
-            "time.windows.com",
-
-            # Analytics / ads (high volume, usually benign)
-            "doubleclick.net",
-            "googletagmanager.com",
-            "google-analytics.com",
-            "facebook.com",
-            "fbcdn.net",
-
-            # Security vendors
-            "symantec.com",
-            "kaspersky.com",
-            "crowdstrike.com",
-            "avast.com",
-            "bitdefender.com",
-        ]
-
         self.setStyleSheet(f"""
             QFrame {{
                 background-color: {THEME['surface_elevated']};
@@ -350,15 +600,12 @@ class CrossPCAPTimelineWidget(QFrame):
         
         self._init_ui()
         
-    
     def _init_ui(self):
-        
-        # Initialize the UI
         layout = QVBoxLayout(self)
         layout.setContentsMargins(15, 15, 15, 15)
-        layout.setSpacing(25)
+        layout.setSpacing(15)
         
-        # Header with title and controls
+        # Header
         header_layout = QHBoxLayout()
         
         title = QLabel("Cross-PCAP Timeline Correlation")
@@ -371,8 +618,13 @@ class CrossPCAPTimelineWidget(QFrame):
         
         header_layout.addStretch()
         
-        # Zoom/density control
-        zoom_label = QLabel("Timeline zoom:")
+        # Performance info
+        self.perf_label = QLabel("")
+        self.perf_label.setStyleSheet(f"color: {THEME['text_secondary']}; font-size: 10px;")
+        header_layout.addWidget(self.perf_label)
+        
+        # Zoom control
+        zoom_label = QLabel("Zoom:")
         zoom_label.setStyleSheet(f"color: {THEME['text_secondary']}; font-size: 12px;")
         header_layout.addWidget(zoom_label)
         
@@ -402,8 +654,8 @@ class CrossPCAPTimelineWidget(QFrame):
         self.zoom_value_label.setStyleSheet(f"color: {THEME['text_secondary']}; font-size: 12px; min-width: 60px;")
         header_layout.addWidget(self.zoom_value_label)
         
-        # Filter type selector
-        filter_label = QLabel("Filter by:")
+        # Filter
+        filter_label = QLabel("Filter:")
         filter_label.setStyleSheet(f"color: {THEME['text_secondary']}; font-size: 12px;")
         header_layout.addWidget(filter_label)
         
@@ -450,42 +702,116 @@ class CrossPCAPTimelineWidget(QFrame):
         
         layout.addLayout(header_layout)
         
-        # Horizontal scroll area for timelines
+        # Minimap
+        minimap_container = QHBoxLayout()
+        minimap_label = QLabel("Overview:")
+        minimap_label.setStyleSheet(f"color: {THEME['text_secondary']}; font-size: 11px;")
+        minimap_container.addWidget(minimap_label)
+        
+        self.minimap = TimelineMinimap(None, None)
+        self.minimap.hide()
+        minimap_container.addWidget(self.minimap, 1)
+        
+        layout.addLayout(minimap_container)
+        
+        # Scroll area
         self.scroll = QScrollArea()
-        self.scroll.setMinimumHeight(240)
+        self.scroll.setMinimumHeight(300)
         self.scroll.setWidgetResizable(True)
         self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOn)
         self.scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         self.scroll.setStyleSheet(f"""
             QScrollArea {{
-                border: none;
+                border: 1px solid {THEME['border']};
                 background-color: {THEME['timeline_bg']};
+                border-radius: 4px;
             }}
             QScrollBar:horizontal {{
-                height: 12px;
+                height: 14px;
                 background: {THEME['timeline_bg']};
             }}
             QScrollBar::handle:horizontal {{
                 background: {THEME['border']};
-                border-radius: 6px;
+                border-radius: 7px;
                 min-width: 40px;
             }}
             QScrollBar::handle:horizontal:hover {{
                 background: {THEME['text_secondary']};
             }}
+            QScrollBar:vertical {{
+                width: 14px;
+                background: {THEME['timeline_bg']};
+            }}
+            QScrollBar::handle:vertical {{
+                background: {THEME['border']};
+                border-radius: 7px;
+                min-height: 40px;
+            }}
+            QScrollBar::handle:vertical:hover {{
+                background: {THEME['text_secondary']};
+            }}
         """)
         
-        # Container for timelines
         self.timeline_container = QWidget()
         self.timeline_layout = QVBoxLayout(self.timeline_container)
         self.timeline_layout.setSpacing(2)
         self.timeline_layout.setContentsMargins(0, 0, 0, 0)
         
         self.scroll.setWidget(self.timeline_container)
+        self.scroll.horizontalScrollBar().valueChanged.connect(self._update_minimap_position)
         
         layout.addWidget(self.scroll)
         
-        # Correlation results section
+        # Navigation
+        nav_layout = QHBoxLayout()
+        
+        jump_start_btn = QPushButton("⏮ Start")
+        jump_start_btn.clicked.connect(lambda: self.jump_to_position(0.0))
+        jump_start_btn.setStyleSheet(self._get_nav_button_style())
+        nav_layout.addWidget(jump_start_btn)
+        
+        jump_end_btn = QPushButton("End ⏭")
+        jump_end_btn.clicked.connect(lambda: self.jump_to_position(1.0))
+        jump_end_btn.setStyleSheet(self._get_nav_button_style())
+        nav_layout.addWidget(jump_end_btn)
+        
+        nav_layout.addStretch()
+        
+        # Correlation limit control
+        limit_label = QLabel("Max correlations:")
+        limit_label.setStyleSheet(f"color: {THEME['text_secondary']}; font-size: 11px;")
+        nav_layout.addWidget(limit_label)
+        
+        self.limit_slider = QSlider(Qt.Horizontal)
+        self.limit_slider.setMinimum(50)
+        self.limit_slider.setMaximum(1000)
+        self.limit_slider.setValue(500)
+        self.limit_slider.setSingleStep(50)
+        self.limit_slider.setMaximumWidth(120)
+        self.limit_slider.valueChanged.connect(self._on_limit_changed)
+        self.limit_slider.setStyleSheet(f"""
+            QSlider::groove:horizontal {{
+                border: 1px solid {THEME['border']};
+                height: 4px;
+                background: {THEME['button_bg']};
+                border-radius: 2px;
+            }}
+            QSlider::handle:horizontal {{
+                background: {THEME['accent']};
+                width: 14px;
+                margin: -5px 0;
+                border-radius: 7px;
+            }}
+        """)
+        nav_layout.addWidget(self.limit_slider)
+        
+        self.limit_value_label = QLabel("500")
+        self.limit_value_label.setStyleSheet(f"color: {THEME['text_secondary']}; font-size: 11px; min-width: 40px;")
+        nav_layout.addWidget(self.limit_value_label)
+        
+        layout.addLayout(nav_layout)
+        
+        # Correlation results
         correlation_header = QHBoxLayout()
         
         correlation_title = QLabel("Correlations Found:")
@@ -507,11 +833,11 @@ class CrossPCAPTimelineWidget(QFrame):
         
         layout.addLayout(correlation_header)
         
-        # Scrollable correlation table
+        # Table
         self.correlation_table = QTableWidget()
         self.correlation_table.setColumnCount(4)
         self.correlation_table.setHorizontalHeaderLabels(['Value', 'PCAP 1', 'PCAP 2', 'Time Δ (s)'])
-        self.correlation_table.setMaximumHeight(180)
+        self.correlation_table.setMaximumHeight(150)
         self.correlation_table.setMinimumHeight(120)
         self.correlation_table.setSelectionBehavior(QTableWidget.SelectRows)
         self.correlation_table.setSelectionMode(QTableWidget.SingleSelection)
@@ -532,7 +858,7 @@ class CrossPCAPTimelineWidget(QFrame):
                 color: white;
             }}
             QTableWidget::item:alternate {{ 
-                background-color: #3a3a3a;  /* Lighter gray to contrast every other row */
+                background-color: #3a3a3a;
             }}
             QTableWidget::item:selected {{
                 background-color: {THEME['accent']};
@@ -553,42 +879,101 @@ class CrossPCAPTimelineWidget(QFrame):
             QHeaderView::section:hover {{
                 background-color: {THEME['border']};
             }}
-            QScrollBar:vertical {{
-                width: 12px;
-                background: {THEME['timeline_bg']};
-            }}
-            QScrollBar::handle:vertical {{
-                background: {THEME['border']};
-                border-radius: 6px;
-                min-height: 20px;
-            }}
-            QScrollBar::handle:vertical:hover {{
-                background: {THEME['text_secondary']};
-            }}
         """)
         
-        # Set column widths
         header = self.correlation_table.horizontalHeader()
-        header.setSectionResizeMode(0, QHeaderView.Stretch)  # Value column stretches
-        header.setSectionResizeMode(1, QHeaderView.ResizeToContents)  # PCAP 1
-        header.setSectionResizeMode(2, QHeaderView.ResizeToContents)  # PCAP 2
-        header.setSectionResizeMode(3, QHeaderView.ResizeToContents)  # Time delta
+        header.setSectionResizeMode(0, QHeaderView.Stretch)
+        header.setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(3, QHeaderView.ResizeToContents)
         
-        # Connect selection to highlighting
         self.correlation_table.itemSelectionChanged.connect(self._on_correlation_selected)
     
         layout.addWidget(self.correlation_table)
     
-    def showEvent(self, event):
+    def _get_nav_button_style(self):
+        return f"""
+            QPushButton {{
+                background-color: {THEME['button_bg']};
+                color: {THEME['text_primary']};
+                border: 1px solid {THEME['border']};
+                border-radius: 4px;
+                padding: 6px 12px;
+                font-size: 11px;
+            }}
+            QPushButton:hover {{
+                background-color: {THEME['surface_elevated']};
+                border-color: {THEME['accent']};
+            }}
+        """
+    
+    def _on_limit_changed(self, value):
         
-        # Create overlay when widget is shown
+        # Update correlation limit
+        self.max_correlations = value
+        self.limit_value_label.setText(str(value))
+        self._apply_correlation_limit()
+    
+    def _apply_correlation_limit(self):
+        
+        # Apply correlation limit and update display
+        if not self.all_correlations:
+            return
+        
+        # Take top N correlations 
+        self.correlations = self.all_correlations[:self.max_correlations]
+        
+        # Update display
+        self._update_correlation_table()
+        self._update_overlay()
+        
+        # Update count label
+        shown = len(self.correlations)
+        total = len(self.all_correlations)
+        if shown < total:
+            self.correlation_count_label.setText(f"{shown}/{total} correlations (limited)")
+        else:
+            self.correlation_count_label.setText(f"{total} correlation{'s' if total != 1 else ''}")
+    
+    def jump_to_position(self, position_pct):
+        if not self.pcap_timelines:
+            return
+        
+        scrollbar = self.scroll.horizontalScrollBar()
+        max_val = scrollbar.maximum()
+        target = int(max_val * position_pct)
+        scrollbar.setValue(target)
+    
+    def _update_minimap_position(self):
+        if not self.minimap or not self.minimap.isVisible():
+            return
+        
+        scrollbar = self.scroll.horizontalScrollBar()
+        if scrollbar.maximum() == 0:
+            self.minimap.set_visible_range(0.0, 1.0)
+            return
+        
+        visible_start = scrollbar.value() / scrollbar.maximum()
+        visible_width = scrollbar.pageStep() / (scrollbar.maximum() + scrollbar.pageStep())
+        visible_end = min(1.0, visible_start + visible_width)
+        
+        self.minimap.set_visible_range(visible_start, visible_end)
+    
+    def wheelEvent(self, event: QWheelEvent):
+        if event.modifiers() & Qt.ShiftModifier:
+            scrollbar = self.scroll.horizontalScrollBar()
+            delta = -event.angleDelta().y()
+            scrollbar.setValue(scrollbar.value() + delta)
+            event.accept()
+        else:
+            super().wheelEvent(event)
+    
+    def showEvent(self, event):
         super().showEvent(event)
         if not self.overlay:
             self._create_overlay()
     
     def _create_overlay(self):
-        
-        # Create the overlay widget
         try:
             if self.overlay:
                 self.overlay.deleteLater()
@@ -598,7 +983,6 @@ class CrossPCAPTimelineWidget(QFrame):
             self.overlay.show()
             self.overlay.raise_()
             
-            # Connect scroll events
             if self.scroll.horizontalScrollBar():
                 self.scroll.horizontalScrollBar().valueChanged.connect(self._update_overlay)
             if self.scroll.verticalScrollBar():
@@ -608,8 +992,6 @@ class CrossPCAPTimelineWidget(QFrame):
             print(f"Error creating overlay: {e}")
     
     def resizeEvent(self, event):
-        
-        # Update overlay size when widget is resized
         super().resizeEvent(event)
         if self.overlay:
             try:
@@ -619,8 +1001,6 @@ class CrossPCAPTimelineWidget(QFrame):
                 print(f"Error in resizeEvent: {e}")
     
     def _update_overlay(self):
-        
-        # Update overlay position and trigger repaint
         if self.overlay:
             try:
                 self.overlay.setGeometry(self.scroll.viewport().rect())
@@ -629,26 +1009,19 @@ class CrossPCAPTimelineWidget(QFrame):
                 print(f"Error updating overlay: {e}")
     
     def _on_zoom_changed(self, value):
-        
-        # Handle zoom slider change
         self.pixels_per_second = value
         self.zoom_value_label.setText(f"{value}px/s")
         self._rebuild_timelines()
     
     def _rebuild_timelines(self):
-        
-        # Rebuild all timelines with new zoom level
         if not self.pcap_timelines:
             return
         
         try:
-            # Get the data from existing timelines
             timeline_data = {}
             for timeline in self.pcap_timelines:
                 timeline_data[timeline.pcap_name] = timeline.events
             
-
-            # Find global time range
             all_events = []
             for events in timeline_data.values():
                 all_events.extend(events)
@@ -656,15 +1029,12 @@ class CrossPCAPTimelineWidget(QFrame):
             if not all_events:
                 return
             
-            for pcap_name, events in timeline_data.items():
-                base = min(e.timestamp for e in events)
-                for e in events:
-                    e.normalized_ts = (e.timestamp - base).total_seconds()
-
             start_time = min(e.timestamp for e in all_events)
             end_time = max(e.timestamp for e in all_events)
             
-            # Clear existing widgets
+            self.start_time = start_time
+            self.end_time = end_time
+            
             for i in reversed(range(self.timeline_layout.count())):
                 widget = self.timeline_layout.itemAt(i).widget()
                 if widget:
@@ -672,7 +1042,6 @@ class CrossPCAPTimelineWidget(QFrame):
             
             self.pcap_timelines = []
             
-            # Recreate timelines with new zoom
             for pcap_name, events in sorted(timeline_data.items()):
                 if events:
                     timeline = PCAPTimeline(pcap_name, events, start_time, end_time, 
@@ -680,120 +1049,122 @@ class CrossPCAPTimelineWidget(QFrame):
                     self.pcap_timelines.append(timeline)
                     self.timeline_layout.addWidget(timeline)
             
-
-            # Add timestamp axis at the bottom
             self.timestamp_axis = TimestampAxis(start_time, end_time, 
                                                pixels_per_second=self.pixels_per_second)
             self.timeline_layout.addWidget(self.timestamp_axis)
             
             self.timeline_layout.addStretch()
             
-            # Update overlay
+            if self.minimap:
+                self.minimap.start_time = start_time
+                self.minimap.end_time = end_time
+                self.minimap.show()
+                QTimer.singleShot(50, self._update_minimap_position)
+            
             QTimer.singleShot(50, self._update_overlay)
             
         except Exception as e:
             print(f"Error rebuilding timelines: {e}")
     
-    
     def _on_filter_changed(self, filter_type):
-        
-        # Handle filter type change
         self.filter_type = filter_type
         self._find_correlations()
     
-    
     def _find_correlations(self):
         
-        # Find correlated events across PCAPs
+        # Find correlations with performance optimizations
         try:
-            self.correlations = []
+            import time
+            start_time = time.time()
             
-            # Collect all events of the selected type
-            all_events = []
+            self.all_correlations = []
+            
+            # Group events by value for faster matching
+            events_by_value = defaultdict(list)
+            
             for timeline in self.pcap_timelines:
                 for event in timeline.events:
                     if event.event_type == self.filter_type:
-                        
-                        # Only filter for important protocols
                         if self.filter_type == 'protocol':
-                            # Only correlate application-layer protocols
                             important_protocols = {'HTTP', 'HTTPS', 'DNS', 'TLS', 'SSH', 'FTP', 'SMTP'}
                             if event.value not in important_protocols:
                                 continue
-
-                        all_events.append(event)
+                        events_by_value[event.value].append(event)
             
-            # Find events with matching values 
-            for i, event1 in enumerate(all_events):
-                for event2 in all_events[i+1:]:
-                    # Check if same value but different PCAPs
-                    if (event1.value == event2.value and 
-                        event1.pcap_name != event2.pcap_name):
-                        
-                        # Check time difference
-                        time_diff = abs((event1.timestamp - event2.timestamp).total_seconds())
-                        self.correlations.append((event1, event2, time_diff))
+            # Find correlations within each value group
+            for value, events in events_by_value.items():
+                if len(events) < 2:
+                    continue
+                
+                # Only compare events from different PCAPs
+                for i, event1 in enumerate(events):
+                    for event2 in events[i+1:]:
+                        if event1.pcap_name != event2.pcap_name:
+                            time_diff = abs((event1.timestamp - event2.timestamp).total_seconds())
+                            self.all_correlations.append((event1, event2, time_diff))
             
-            # Sort correlations by time difference
-            self.correlations.sort(key=lambda x: x[2])
+            # Sort by time difference
+            self.all_correlations.sort(key=lambda x: x[2])
             
-            # Update count label
-            count = len(self.correlations)
-            self.correlation_count_label.setText(f"{count} correlation{'s' if count != 1 else ''}")
+            # Apply limit
+            self._apply_correlation_limit()
             
-            # Clear and populate table
+            end_time = time.time()
+            elapsed = end_time - start_time
+            
+            # Update performance label
+            total = len(self.all_correlations)
+            self.perf_label.setText(f"Found in {elapsed:.2f}s")
+            
+        except Exception as e:
+            print(f"Error finding correlations: {e}")
+    
+    def _update_correlation_table(self):
+        
+        # Update table with current correlations
+        try:
             self.correlation_table.setRowCount(0)
-            self.correlation_table.setSortingEnabled(False)  # Disable while populating
+            self.correlation_table.setSortingEnabled(False)
             
             if self.correlations:
                 self.correlation_table.setRowCount(len(self.correlations))
                 
                 for row, (event1, event2, time_diff) in enumerate(self.correlations):
-                    # Value column
                     value_item = QTableWidgetItem(str(event1.value))
                     value_item.setToolTip(f"Full value: {event1.value}")
                     self.correlation_table.setItem(row, 0, value_item)
                     
-                    # PCAP 1 column
                     pcap1_item = QTableWidgetItem(event1.pcap_name)
-                    pcap1_item.setToolTip(f"File: {event1.pcap_name}")
+                    pcap1_item.setToolTip(f"File: {event1.pcap_name}\nTime: {event1.timestamp.strftime('%H:%M:%S')}")
                     self.correlation_table.setItem(row, 1, pcap1_item)
                     
-                    # PCAP 2 column
                     pcap2_item = QTableWidgetItem(event2.pcap_name)
-                    pcap2_item.setToolTip(f"File: {event2.pcap_name}")
+                    pcap2_item.setToolTip(f"File: {event2.pcap_name}\nTime: {event2.timestamp.strftime('%H:%M:%S')}")
                     self.correlation_table.setItem(row, 2, pcap2_item)
                     
-                    # Time difference column
                     time_item = QTableWidgetItem(f"{time_diff:.2f}")
-                    time_item.setData(Qt.UserRole, time_diff)  # Store numeric value for sorting
+                    time_item.setData(Qt.UserRole, time_diff)
                     time_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
                     time_item.setToolTip(f"Time difference: {time_diff:.2f} seconds")
                     self.correlation_table.setItem(row, 3, time_item)
                 
-                # Re-enable sorting
                 self.correlation_table.setSortingEnabled(True)
                 
             else:
-                # Show a "no results" message in the table
                 self.correlation_table.setRowCount(1)
                 no_results_item = QTableWidgetItem(f"No correlations found for {self.filter_type}")
                 no_results_item.setTextAlignment(Qt.AlignCenter)
                 no_results_item.setForeground(QColor(THEME['text_secondary']))
                 self.correlation_table.setItem(0, 0, no_results_item)
-                self.correlation_table.setSpan(0, 0, 1, 4)  # Span across all columns
-            
-            # Update overlay with new correlations
-            self._update_overlay()
+                self.correlation_table.setSpan(0, 0, 1, 4)
             
         except Exception as e:
-            print(f"Error finding correlations: {e}")
+            print(f"Error updating table: {e}")
     
     def _on_correlation_selected(self):
         try:
             selected_rows = self.correlation_table.selectedIndexes()
             if not selected_rows or not self.correlations:
-                # Clear all highlights if nothing selected
                 for timeline in self.pcap_timelines:
                     timeline.clear_highlights()
                 return
@@ -802,23 +1173,29 @@ class CrossPCAPTimelineWidget(QFrame):
             if row < len(self.correlations):
                 event1, event2, time_diff = self.correlations[row]
                 
-                # Find and highlight events on their respective timelines
                 for timeline in self.pcap_timelines:
                     if timeline.pcap_name == event1.pcap_name:
                         timeline.set_highlighted_events([event1])
+                        self._scroll_to_event(event1)
                     elif timeline.pcap_name == event2.pcap_name:
                         timeline.set_highlighted_events([event2])
                     else:
-                        timeline.clear_highlights()  # Clear other timelines
+                        timeline.clear_highlights()
                 
         except Exception as e:
             print(f"Error handling correlation selection: {e}")
+    
+    def _scroll_to_event(self, event):
+        scrollbar = self.scroll.horizontalScrollBar()
+        viewport_width = self.scroll.viewport().width()
+        
+        target_x = event.x_pos - (viewport_width // 2)
+        target_x = max(0, min(target_x, scrollbar.maximum()))
+        
+        scrollbar.setValue(target_x)
 
     def load_timeline_data(self, timeline_data):
-        
-        # Load timeline data from external source
         try:
-            # Clear existing timelines
             for i in reversed(range(self.timeline_layout.count())):
                 widget = self.timeline_layout.itemAt(i).widget()
                 if widget:
@@ -826,35 +1203,30 @@ class CrossPCAPTimelineWidget(QFrame):
 
             self.pcap_timelines = []
 
-            # find global time range across all files
             all_events = []
             for events in timeline_data.values():
                 all_events.extend(events)
 
-            # Normalize timestamps per PCAP 
-            for pcap_name, events in timeline_data.items():
-                if not events:
-                    continue
-                base = min(e.timestamp for e in events)
-                for e in events:
-                    e.normalized_ts = (e.timestamp - base).total_seconds()
-
-
             if not all_events:
-                # Show no data message
                 no_data_label = QLabel("No events found for selected fields")
-                no_data_label.setStyleSheet(f"color: {THEME['text_secondary']}; padding: 20px")
+                no_data_label.setStyleSheet(f"color: {THEME['text_secondary']}; padding: 20px;")
                 self.timeline_layout.addWidget(no_data_label)
                 
-                # Clear correlation table
                 self.correlation_table.setRowCount(0)
                 self.correlation_count_label.setText("0 correlations")
+                self.minimap.hide()
                 return
             
             start_time = min(e.timestamp for e in all_events)
             end_time = max(e.timestamp for e in all_events)
+            
+            self.start_time = start_time
+            self.end_time = end_time
+            
+            # Update perf label with event count
+            total_events = len(all_events)
+            self.perf_label.setText(f"{total_events} events loaded")
 
-            # Create timeline for each file
             for pcap_name, events in sorted(timeline_data.items()):
                 if events:
                     timeline = PCAPTimeline(pcap_name, events, start_time, end_time,
@@ -862,18 +1234,21 @@ class CrossPCAPTimelineWidget(QFrame):
                     self.pcap_timelines.append(timeline)
                     self.timeline_layout.addWidget(timeline)
 
-            # Add timestamp axis
             self.timestamp_axis = TimestampAxis(start_time, end_time,
                                                pixels_per_second=self.pixels_per_second)
             self.timeline_layout.addWidget(self.timestamp_axis)
 
             self.timeline_layout.addStretch()
 
-            # Ensure overlay is created
+            if self.minimap:
+                self.minimap.start_time = start_time
+                self.minimap.end_time = end_time
+                self.minimap.show()
+                QTimer.singleShot(100, self._update_minimap_position)
+
             if not self.overlay:
                 QTimer.singleShot(100, self._create_overlay)
 
-            # Find correlations
             QTimer.singleShot(150, self._find_correlations)
             
         except Exception as e:
