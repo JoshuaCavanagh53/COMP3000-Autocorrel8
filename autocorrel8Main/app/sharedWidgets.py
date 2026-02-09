@@ -8,8 +8,6 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import Qt, QDir, pyqtSignal
 
 
-
-
 class DataSources(QFrame):
 
     fileSelected = pyqtSignal(str)
@@ -112,27 +110,22 @@ class ButtonLayout(QFrame):
     
     def __init__(self, button1, button2, button3):
         super().__init__()
-        self.setFixedHeight(75)
+        
+        # Compact height
+        self.setFixedHeight(50)
         layout = QHBoxLayout()
-        layout.setContentsMargins(0, 10, 0, 10)
-        layout.setSpacing(15)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
         self.button1 = button1
         self.button2 = button2
         self.button3 = button3
 
-        self.setStyleSheet("""
-            QFrame {
-                border: none;
-                background-color: transparent;
-            }
-        """)
         
         button_style = f"""
             QPushButton {{
                 background-color: {THEME['button_bg']};
                 color: {THEME['text_primary']};
                 border: 1px solid {THEME['border']};
-                border-radius: 4px;
                 padding: 10px 10px;
                 font-size: 13px;
                 font-weight: 500;
@@ -182,7 +175,8 @@ class TopNavBar(QFrame):
         """)
         layout = QHBoxLayout()
         layout.setContentsMargins(20, 0, 20, 0)
-        layout.setSpacing(40)
+        layout.setSpacing(20)
+        self.setFixedHeight(50)
 
         # Title label
         title = QLabel("AutoCorrel8")

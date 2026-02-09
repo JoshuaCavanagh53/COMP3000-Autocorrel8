@@ -12,11 +12,14 @@ from PyQt5.QtCore import Qt
 class CorrelationSelectionTable(QFrame):
     def __init__(self, path):
         super().__init__()
-        self.setFixedHeight(450)
-        self.setFixedWidth(400)
+        
+        # Set max height to keep top section compact
+        self.setMaximumHeight(400)
+        self.setMinimumWidth(400)
+        
         layout = QVBoxLayout()  
-        layout.setContentsMargins(15, 15, 15, 15)
-        layout.setSpacing(10)
+        layout.setContentsMargins(5, 5, 5, 5)
+        layout.setSpacing(5)
 
         self.path = path
 
@@ -259,5 +262,3 @@ class CorrelationSelectionTable(QFrame):
                 selected_by_file[filename].append(field_name)
         
         return selected_by_file
-        
-        

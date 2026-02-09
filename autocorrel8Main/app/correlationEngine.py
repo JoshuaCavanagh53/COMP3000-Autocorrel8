@@ -1,5 +1,12 @@
 from datetime import datetime
-from correlationVizuals import TimelineEvent
+
+# Timeline event data structure
+class TimelineEvent:
+    def __init__(self, timestamp, event_type, value, pcap_name):
+        self.timestamp = timestamp
+        self.event_type = event_type
+        self.value = value
+        self.pcap_name = pcap_name
 
 class CorrelationEngine:
 
@@ -87,5 +94,3 @@ class CorrelationEngine:
                 timeline_data[filename] = events
 
         return timeline_data
-    
-
