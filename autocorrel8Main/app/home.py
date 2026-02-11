@@ -628,13 +628,13 @@ class DropBox(QFrame):
     def routeFile(file_path):
         ext = Path(file_path).suffix.lower()
 
-        if ext == ".pcap":
+        if ext == ".pcap" or ext == ".pcapng":
             return "pcap"
         elif ext == ".evtx":
             return "windows_event_parser"
         elif ext == ".log":
             return "syslog_parser"
-        elif ext == ".sqlite":
+        elif ext == ".db":
             return "browser_parser"
         else: 
             return "unsupported file type"

@@ -68,8 +68,20 @@ class SourceOverview(QFrame):
                 file_size_mb = round(getsize(file_path) / (1024 * 1024), 2)
                 timestamp = time.ctime(getsize(file_path))  
 
-                if ".pcap" in file_name:
+                # Determine source type based on file extension
+                if ".pcap" in file_name or ".pcapng" in file_name:
                     source_type = "network"
+                elif ".db" in file_name or ".sqlite" in file_name:
+                    if "history" in file_name.lower():
+                        source_type = "browser"
+                    else:
+                        source_type = "database"
+                elif ".evtx" in file_name:
+                    source_type = "windows_event"
+                elif ".log" in file_name:
+                    source_type = "log"
+                else:
+                    source_type = "unknown"
 
                 self.file_table.setItem(row, 0, QTableWidgetItem(file_name))
                 self.file_table.setItem(row, 1, QTableWidgetItem(source_type))  

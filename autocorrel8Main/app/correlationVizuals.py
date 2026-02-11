@@ -64,13 +64,12 @@ class CorrelationVizuals(QFrame):
         self.distribution_chart_widget = DistributionChartWidget()
         
         # Cross-PCAP mode shows cross-PCAP view
-        self.cross_pcap_widget = QLabel("Cross-PCAP Communication View - Coming Soon")
-        self.cross_pcap_widget.setStyleSheet(f"color: {THEME['text_secondary']}; padding: 20px;")
+        self.incognito_gap_widget = IncognitoGapWidget()
 
         # Add widgets to stack 
         self.stacked_widget.addWidget(self.correlation_table_widget)
         self.stacked_widget.addWidget(self.distribution_chart_widget)
-        self.stacked_widget.addWidget(self.cross_pcap_widget)
+        self.stacked_widget.addWidget(self.incognito_gap_widget)
 
         layout.addWidget(self.stacked_widget)
 
@@ -83,7 +82,7 @@ class CorrelationVizuals(QFrame):
         # Connect buttons to switch views
         button_layout.correlation_table_button.clicked.connect(self.show_correlation_table_mode)
         button_layout.distribution_button.clicked.connect(self.show_distribution_mode)
-        button_layout.cross_pcap_button.clicked.connect(self.show_cross_pcap_mode)
+        button_layout.incognito_gap_button.clicked.connect(self.show_cross_pcap_mode)
 
         # Push everything to top
         layout.addStretch()
@@ -346,10 +345,10 @@ class VizualButtonLayout(QFrame):
         # Add buttons
         self.correlation_table_button = QPushButton("Correlation Table")
         self.distribution_button = QPushButton("Distribution")
-        self.cross_pcap_button = QPushButton("Cross PCAP")
+        self.incognito_gap_button = QPushButton("Incognito Gaps")
     
         # Configure buttons
-        for btn in (self.correlation_table_button, self.distribution_button, self.cross_pcap_button):
+        for btn in (self.correlation_table_button, self.distribution_button, self.incognito_gap_button):
             btn.setCheckable(True) 
             btn.setFixedSize(115, 35)
             btn.setCursor(Qt.PointingHandCursor)
@@ -361,3 +360,140 @@ class VizualButtonLayout(QFrame):
         self.correlation_table_button.setChecked(True)
 
         self.setLayout(layout)
+
+
+# Visualization for gaps
+class IncognitoGapWidget(QFrame):
+
+    # Display detected incognito browsing gaps
+    def __init__(self):
+        super().__init__()
+
+        layout = QVBoxLayout()
+        layout.setContentsMargins(5, 5, 5, 5)
+        layout.setSpacing(5)
+        
+        # Table title
+        title = QLabel("Potential Incognito Gaps Detected")
+        title.setStyleSheet(f"""
+            color: {THEME['text_primary']};
+            font-size: 14px;
+            font-weight: bold;
+        """)
+        layout.addWidget(title)
+
+
+        # Table 
+        self.gap_table = QTableWidget()
+        self.gap_table.setColumnCount(7) 
+        self.gap_table.setHorizontalHeaderLabels([
+            "Domain", "Score", "Count", "Category", "First Seen", "Last Seen", "Duration"
+        ])
+        
+        self.gap_table.setStyleSheet(f"""
+            QTableWidget {{
+                background-color: {THEME['surface']};
+                color: {THEME['text_primary']};
+                border: 1px solid {THEME['border']};
+                border-radius: 4px;
+                gridline-color: {THEME['border']};
+            }}
+            QTableWidget::item {{
+                padding: 5px;
+            }}
+            QTableWidget::item:selected {{
+                background-color: {THEME['button_checked']};
+                color: {THEME['accent']};
+            }}
+            QHeaderView::section {{
+                background-color: {THEME['button_bg']};
+                color: {THEME['text_primary']};
+                padding: 5px;
+                border: 1px solid {THEME['border']};
+                font-weight: bold;
+            }}
+        """)
+        
+        # Column widths
+        self.gap_table.setColumnWidth(0, 220)  # Domain
+        self.gap_table.setColumnWidth(1, 50)   # Score
+        self.gap_table.setColumnWidth(2, 50)   # Count
+        self.gap_table.setColumnWidth(3, 140)  # Category
+        self.gap_table.setColumnWidth(4, 140)  # First Seen
+        self.gap_table.setColumnWidth(5, 140)  # Last Seen
+        self.gap_table.setColumnWidth(6, 80)   # Duration
+        self.gap_table.horizontalHeader().setStretchLastSection(True)
+        
+        # Hide vertical header
+        self.gap_table.verticalHeader().setVisible(False)
+
+        layout.addWidget(self.gap_table)
+        self.setLayout(layout)
+
+    def load_gaps(self, gap_data):
+       
+        # Display gap events in table 
+        # Clear existing
+        self.gap_table.setRowCount(0)
+        
+        if not gap_data:
+            return
+        
+        # Populate table
+        self.gap_table.setRowCount(len(gap_data))
+        
+        for row, gap in enumerate(gap_data):
+            
+            # Domain
+            domain_item = QTableWidgetItem(gap['domain'])
+            self.gap_table.setItem(row, 0, domain_item)
+            
+            # Score (color-coded)
+            score = gap['suspiciousness']
+            score_item = QTableWidgetItem(str(score))
+            
+            if score >= 60:
+                score_item.setForeground(QColor("#FF4444"))  # Red
+            elif score >= 30:
+                score_item.setForeground(QColor("#FFA500"))  # Orange
+            else:
+                score_item.setForeground(QColor("#888888"))  # Gray
+            
+            self.gap_table.setItem(row, 1, score_item)
+            
+            # Count
+            count_item = QTableWidgetItem(str(gap['count']))
+            self.gap_table.setItem(row, 2, count_item)
+            
+            # Category
+            category_item = QTableWidgetItem(gap['category'])
+            self.gap_table.setItem(row, 3, category_item)
+            
+            # First Seen
+            first_seen_str = gap['first_seen'].strftime('%Y-%m-%d %H:%M:%S')
+            first_seen_item = QTableWidgetItem(first_seen_str)
+            self.gap_table.setItem(row, 4, first_seen_item)
+            
+            # Last Seen 
+            last_seen_str = gap['last_seen'].strftime('%Y-%m-%d %H:%M:%S')
+            last_seen_item = QTableWidgetItem(last_seen_str)
+            self.gap_table.setItem(row, 5, last_seen_item)
+            
+            # Duration 
+            duration = gap['last_seen'] - gap['first_seen']
+            
+            # Format duration nicely
+            total_seconds = int(duration.total_seconds())
+            if total_seconds < 60:
+                duration_str = f"{total_seconds}s"
+            elif total_seconds < 3600:
+                minutes = total_seconds // 60
+                seconds = total_seconds % 60
+                duration_str = f"{minutes}m {seconds}s"
+            else:
+                hours = total_seconds // 3600
+                minutes = (total_seconds % 3600) // 60
+                duration_str = f"{hours}h {minutes}m"
+            
+            duration_item = QTableWidgetItem(duration_str)
+            self.gap_table.setItem(row, 6, duration_item)

@@ -13,6 +13,10 @@ from correlationEngine import CorrelationEngine
 from timelineCorrelation import CrossPCAPTimelineWidget
 import os
 import json
+from browserLogParser import BrowserLogParser
+from correlationEngine import GapDetector
+
+
 
 # Dark mode by default
 CURRENT_THEME = 'dark'
@@ -106,6 +110,26 @@ class CorrelationDashboard(QMainWindow):
         # Pass timeline widget reference to correlation view for clearing/showing
         self.correlation_view.set_timeline_widget(self.timeline_widget)
 
+        self.incognito_button = QPushButton("Detect Incognito Gaps")
+        
+        # Incognito gap widget
+        self.incognito_button.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {THEME['accent']};
+                color: white;
+                border: none;
+                border-radius: 4px;
+                padding: 10px;
+                font-size: 13px;
+                font-weight: bold;
+            }}
+            QPushButton:hover {{
+                background-color: {THEME['button_checked']};
+            }}
+        """)
+        self.incognito_button.clicked.connect(self.detect_incognito_gaps)  
+        left_panel_layout.addWidget(self.incognito_button)
+
         # Add content container to main layout
         main_layout.addWidget(content_container)
 
@@ -147,6 +171,118 @@ class CorrelationDashboard(QMainWindow):
                 pass
         
         return packets_by_file
+    
+    def detect_incognito_gaps(self):
+        
+        # Detect gaps between PCAP traffic and browser history
+        print("Starting incognito gap detection...\n")
+        
+        # Get PCAP domain events 
+        selected_fields = self.correlation_selection_table.get_selected_fields_by_file()
+        packets_by_file = self.get_packets_for_selected_files(selected_fields.keys())
+        
+        pcap_timeline = self.correlation_engine.prepare_timeline_data(
+            packets_by_file,
+            selected_fields
+        )
+        
+        # Extract domain events from PCAPs
+        pcap_domain_events = []
+        for filename, events in pcap_timeline.items():
+            domain_events = [e for e in events if e.event_type == 'domain']
+            pcap_domain_events.extend(domain_events)
+        
+        print(f"Found {len(pcap_domain_events)} domain events in PCAPs")
+        
+        # Get browser history events 
+        browser_events = self.get_browser_history_events()
+        
+        if not browser_events:
+            print("No browser history found! Upload a History.db file to evidence folder.\n")
+            return
+        
+        print(f"Found {len(browser_events)} browser history entries\n")
+        
+        # Find and score gaps
+        detector = GapDetector(time_window_seconds=60)
+        grouped_gaps = detector.find_gaps_grouped(pcap_domain_events, browser_events)
+        
+        print(f"Analyzed {len(grouped_gaps)} unique domains\n")
+        
+        if not grouped_gaps:
+            print("No gaps detected - all network traffic matches browser history\n")
+            return
+        
+        # Separate by suspiciousness
+        high_suspicious = [g for g in grouped_gaps if g['suspiciousness'] >= 60]
+        medium_suspicious = [g for g in grouped_gaps if 30 <= g['suspiciousness'] < 60]
+        low_suspicious = [g for g in grouped_gaps if g['suspiciousness'] < 30]
+        
+        # Display results
+        
+        # HIGH PRIORITY
+        if high_suspicious:
+            print("HIGH PRIORITY - Likely Incognito Browsing:")
+            print(f"{'Domain':<40} {'Score':<7} {'Count':<7} {'Category':<25} {'First Seen'}")
+            print("-" * 120)
+            for gap in high_suspicious:
+                print(f"{gap['domain']:<40} {gap['suspiciousness']:<7} {gap['count']:<7} {gap['category']:<25} {gap['first_seen'].strftime('%Y-%m-%d %H:%M:%S')}")
+            print()
+        
+        # MEDIUM PRIORITY
+        if medium_suspicious:
+            print("MEDIUM PRIORITY - Review Recommended:")
+            print(f"{'Domain':<40} {'Score':<7} {'Count':<7} {'Category':<25} {'First Seen'}")
+            print("-" * 120)
+            for gap in medium_suspicious[:20]:  # Show top 20
+                print(f"{gap['domain']:<40} {gap['suspiciousness']:<7} {gap['count']:<7} {gap['category']:<25} {gap['first_seen'].strftime('%Y-%m-%d %H:%M:%S')}")
+            if len(medium_suspicious) > 20:
+                print(f"... and {len(medium_suspicious) - 20} more")
+            print()
+        
+        # LOW PRIORITY (Collapsed)
+        if low_suspicious:
+            print(f"LOW PRIORITY - Background Services ({len(low_suspicious)} domains)")
+            print("   [Likely infrastructure/services]")
+            print("-" * 120)
+            for gap in low_suspicious[:5]:
+                print(f"   {gap['domain']:<40} (Score: {gap['suspiciousness']}, {gap['category']})")
+            if len(low_suspicious) > 5:
+                print(f"   ... and {len(low_suspicious) - 5} more background services")
+            print()
+        
+        # Summary
+        print("=" * 120)
+        print(f"Summary: {len(high_suspicious)} high priority | {len(medium_suspicious)} medium priority | {len(low_suspicious)} low priority")
+        print("=" * 120)
+        print()
+
+        # Load gaps into timeline view
+        self.correlation_view.incognito_gap_widget.load_gaps(grouped_gaps)
+
+
+    def get_browser_history_events(self):
+        
+        # Load and parse browser history from evidence folder
+        
+        evidence_dir = os.path.join(self.path, "evidence")
+        browser_events = []
+        
+        # Look for browser history files
+        for filename in os.listdir(evidence_dir):
+            if filename.endswith(('.sqlite', '.db')) and 'history' in filename.lower():
+                
+                history_path = os.path.join(evidence_dir, filename)
+                print(f"Found browser history: {filename}")
+                
+                # Parse it
+                parser = BrowserLogParser()
+                events = parser.parse_browser_history('chrome', history_path)
+                browser_events.extend(events)
+                
+                print(f"✓ Parsed {len(events)} entries from {filename}")
+        
+        return browser_events
 
 # Start the application
 if __name__ == "__main__":

@@ -262,3 +262,24 @@ class CorrelationSelectionTable(QFrame):
                 selected_by_file[filename].append(field_name)
         
         return selected_by_file
+    
+
+class BrowserLogSelection(QFrame):
+    
+    def __init__(self):
+        super().__init__()
+        layout = QVBoxLayout()
+
+        # File picker for chrome history
+        self.chrome_history_btn = QPushButton("Select Chrome History DB")
+        self.chrome_history_path = None
+
+        # File picker for Firefox history
+        self.firefox_history_btn = QPushButton("Select Firefox history DB")
+        self.firefox_history_path = None
+        
+        layout.addWidget(QLabel("Browser Logs"))
+        layout.addWidget(self.chrome_history_btn)
+        layout.addWidget(self.firefox_history_btn)
+
+        self.setLayout(layout)
