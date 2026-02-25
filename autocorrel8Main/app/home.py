@@ -898,6 +898,7 @@ class AutoCorrel8Dashboard(QMainWindow):
         # Set window title and size
         self.setWindowTitle("AutoCorrel8 Dashboard")
         self.setGeometry(100, 100, 1920, 1080)
+        self.showMaximized()  # Start maximized
 
         # Central widget
         central_widget = QWidget()

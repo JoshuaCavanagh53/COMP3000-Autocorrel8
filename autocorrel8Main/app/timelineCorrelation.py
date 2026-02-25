@@ -148,6 +148,7 @@ class PCAPTimeline(QWidget):
         self.clusters = []
         self.use_clustering = True
         self.cluster_threshold = 15  # Events within 15 pixels of each other get clustered
+        self.visible_event_set = None  # None = show all; set = only show members
         
         self.setMinimumHeight(height)
         self.setMaximumHeight(height)
@@ -172,41 +173,42 @@ class PCAPTimeline(QWidget):
             elapsed = (event.timestamp - self.start_time).total_seconds()
             event.x_pos = 100 + int(elapsed * self.pixels_per_second)
 
-    def _create_clusters(self):
-        
-        # Group nearby events into clusters to reduce rendering load
-        if not self.events or not self.use_clustering:
+    def _create_clusters(self, source_events=None):
+        events = source_events if source_events is not None else self.events
+        if not events or not self.use_clustering:
             self.clusters = []
             return
-        
-        # Sort events by x position
-        sorted_events = sorted(self.events, key=lambda e: e.x_pos)
-        
+        sorted_events = sorted(events, key=lambda e: e.x_pos)
         self.clusters = []
         current_cluster_events = [sorted_events[0]]
         cluster_start = sorted_events[0].x_pos
-        
         for event in sorted_events[1:]:
-            # If event is close to last event in the cluster, add to cluster
             if event.x_pos - current_cluster_events[-1].x_pos <= self.cluster_threshold:
                 current_cluster_events.append(event)
             else:
-                # Create cluster from accumulated events
                 if len(current_cluster_events) > 1:
                     cluster_end = current_cluster_events[-1].x_pos
                     self.clusters.append(EventCluster(current_cluster_events, cluster_start, cluster_end))
-                else:
-                    # Single event is not part of a cluster
-                    pass
-                
-                # Start new cluster
                 current_cluster_events = [event]
                 cluster_start = event.x_pos
-        
-        # Handle last cluster
         if len(current_cluster_events) > 1:
             cluster_end = current_cluster_events[-1].x_pos
             self.clusters.append(EventCluster(current_cluster_events, cluster_start, cluster_end))
+
+    def set_visible_events(self, event_set):
+
+        # Filter which events are drawn, pass None to restore show all
+        self.visible_event_set = event_set
+        if event_set is None:
+            self._create_clusters()
+        else:
+            self._create_clusters(source_events=[e for e in self.events if e in event_set])
+        self.update()
+
+    def clear_visible_filter(self):
+
+        # Remove the visibility filter and show all events
+        self.set_visible_events(None)
 
     def set_highlighted_events(self, events):
         self.highlighted_events = events if events else []
@@ -242,6 +244,8 @@ class PCAPTimeline(QWidget):
             # Check individual events if not over a cluster
             self.hovered_event = None
             for ev in self.events:
+                if self.visible_event_set is not None and ev not in self.visible_event_set:
+                    continue
                 # Only check events not in clusters or highlighted
                 if ev in self.highlighted_events or any(ev in c.events for c in self.clusters):
                     if ev in self.highlighted_events and abs(ev.x_pos - mouse_x) < 10:
@@ -262,7 +266,7 @@ class PCAPTimeline(QWidget):
     
     def mousePressEvent(self, event):
         
-        # Handle mouse clicks on clusters and events
+        # Handle mouse clicks on events first, then clusters
         if event.button() != Qt.LeftButton:
             return
         
@@ -270,12 +274,32 @@ class PCAPTimeline(QWidget):
         mouse_y = event.y()
         timeline_y = self.timeline_height // 2
         
-        # Check if click is on a cluster
+        # Check invidual events first
+        for event_obj in self.events:
+            if self.visible_event_set is not None and event_obj not in self.visible_event_set:
+                continue
+            distance_x = abs(mouse_x - event_obj.x_pos)
+            distance_y = abs(mouse_y - timeline_y)
+            
+            if distance_x < 15 and distance_y < 25:  # Click area
+                print(f"✓ CLICKED EVENT: {event_obj.value}")
+                
+                # Notify parent
+                parent = self.parent()
+                while parent and not hasattr(parent, 'on_timeline_event_clicked'):
+                    parent = parent.parent()
+                
+                if parent and hasattr(parent, 'on_timeline_event_clicked'):
+                    parent.on_timeline_event_clicked(event_obj, self.pcap_name)
+                
+                event.accept()
+                return
+        
+        # Theb check if click is on a cluster 
         for cluster in self.clusters:
             if cluster.contains_point(mouse_x, mouse_y, timeline_y):
                 # Toggle cluster expansion
-                was_expanded = cluster.expanded
-                cluster.toggle_expansion()
+                was_expanded = cluster.toggle_expansion()
                 
                 print(f"\n=== Cluster Click ===")
                 print(f"Cluster with {cluster.count} events")
@@ -287,7 +311,7 @@ class PCAPTimeline(QWidget):
                 event.accept()
                 return
         
-        # If no cluster was clicked, let the event propagate
+        # If no event or cluster was clicked, let the event propagate
         super().mousePressEvent(event)
 
     def paintEvent(self, event):
@@ -336,6 +360,10 @@ class PCAPTimeline(QWidget):
         for ev in self.events:
             # Remove offscreen events
             if ev.x_pos < viewport_rect.left() - 50 or ev.x_pos > viewport_rect.right() + 50:
+                continue
+            
+            # Skip events hidden by the current visibility filter
+            if self.visible_event_set is not None and ev not in self.visible_event_set:
                 continue
             
             # Skip events in expanded clusters 
@@ -407,7 +435,7 @@ class PCAPTimeline(QWidget):
                 painter.drawText(QRect(cluster.x_start - 20, timeline_y + 12, width + 40, 15),
                                Qt.AlignCenter, hint_text)
         else:
-            # Expanded state - draw individual events spread vertically
+            # Expanded state, draw individual events spread vertically
             self._draw_expanded_cluster(painter, cluster, timeline_y, is_hovered)
 
     def _draw_expanded_cluster(self, painter, cluster, timeline_y, is_hovered):
@@ -736,7 +764,8 @@ class CrossPCAPTimelineWidget(QFrame):
         self.timestamp_axis = None
         self.correlations = []
         self.all_correlations = []  # Store all before filtering
-        self.filter_type = 'domain'
+        self.grouped_visible = {}   # (type, value), pcap_name: [events]
+        self.filter_mode = 'found_in_both'   # 'found_in_both' | 'found_multiple_times'
         self.time_threshold = 5.0
         self.pixels_per_second = 50
         self.overlay = None
@@ -809,13 +838,17 @@ class CrossPCAPTimelineWidget(QFrame):
         self.zoom_value_label.setStyleSheet(f"color: {THEME['text_secondary']}; font-size: 12px; min-width: 60px;")
         header_layout.addWidget(self.zoom_value_label)
         
-        # Filter
-        filter_label = QLabel("Filter:")
+        # Mode selector
+        filter_label = QLabel("Show:")
         filter_label.setStyleSheet(f"color: {THEME['text_secondary']}; font-size: 12px;")
         header_layout.addWidget(filter_label)
         
         self.filter_combo = QComboBox()
-        self.filter_combo.addItems(['domain', 'ip', 'port', 'protocol'])
+        self.filter_combo.addItems(['Found in Both', 'Found Multiple Times'])
+        self.filter_combo.setToolTip(
+            "Found in Both, only show events that appear across multiple PCAPs\n"
+            "Found Multiple Times, show events with more than one occurrence anywhere"
+        )
         self.filter_combo.setStyleSheet(f"""
             QComboBox {{
                 background-color: {THEME['button_bg']};
@@ -987,6 +1020,10 @@ class CrossPCAPTimelineWidget(QFrame):
         correlation_header.addStretch()
         
         layout.addLayout(correlation_header)
+        
+        # Info panel overlay (initially hidden)
+        self.info_panel = TimelineInfoPanel(self)
+        self.info_panel.hide()
     
     
     def _get_nav_button_style(self):
@@ -1021,8 +1058,7 @@ class CrossPCAPTimelineWidget(QFrame):
         # Take top N correlations 
         self.correlations = self.all_correlations[:self.max_correlations]
         
-        # Update display
-        self._update_correlation_table()
+        # Update overlay
         self._update_overlay()
         
         # Update count label
@@ -1072,22 +1108,27 @@ class CrossPCAPTimelineWidget(QFrame):
             self._create_overlay()
     
     def _create_overlay(self):
-        try:
-            if self.overlay:
-                self.overlay.deleteLater()
-            
-            self.overlay = CorrelationOverlay(self.scroll.viewport())
-            self.overlay.setGeometry(self.scroll.viewport().rect())
-            self.overlay.show()
-            self.overlay.raise_()
-            
-            if self.scroll.horizontalScrollBar():
-                self.scroll.horizontalScrollBar().valueChanged.connect(self._update_overlay)
-            if self.scroll.verticalScrollBar():
-                self.scroll.verticalScrollBar().valueChanged.connect(self._update_overlay)
-                
-        except Exception as e:
-            print(f"Error creating overlay: {e}")
+        # DISABLED: Correlation overlay causes performance issues
+        # The overlay draws lines between correlated events but lags with many correlations
+        return
+        
+        # Old code commented out:
+        # try:
+        #     if self.overlay:
+        #         self.overlay.deleteLater()
+        #     
+        #     self.overlay = CorrelationOverlay(self.scroll.viewport())
+        #     self.overlay.setGeometry(self.scroll.viewport().rect())
+        #     self.overlay.show()
+        #     self.overlay.raise_()
+        #     
+        #     if self.scroll.horizontalScrollBar():
+        #         self.scroll.horizontalScrollBar().valueChanged.connect(self._update_overlay)
+        #     if self.scroll.verticalScrollBar():
+        #         self.scroll.verticalScrollBar().valueChanged.connect(self._update_overlay)
+        #         
+        # except Exception as e:
+        #     print(f"Error creating overlay: {e}")
     
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -1164,125 +1205,102 @@ class CrossPCAPTimelineWidget(QFrame):
         except Exception as e:
             print(f"Error rebuilding timelines: {e}")
     
-    def _on_filter_changed(self, filter_type):
-        self.filter_type = filter_type
+    def _on_filter_changed(self, label):
+        self.filter_mode = 'found_in_both' if label == 'Found in Both' else 'found_multiple_times'
         self._find_correlations()
     
     def _find_correlations(self):
-        
-        # Find correlations with performance optimizations
         try:
             import time
-            start_time = time.time()
+            t0 = time.time()
             
             self.all_correlations = []
-            
-            # Group events by value for faster matching
-            events_by_value = defaultdict(list)
-            
+            # grouped_visible: (type, value) → {pcap_name: [events]}  — drives the table
+            self.grouped_visible = defaultdict(lambda: defaultdict(list))
+
+            # Group ALL events by (type, value)
+            events_by_key  = defaultdict(list)
+            pcaps_by_key   = defaultdict(set)
             for timeline in self.pcap_timelines:
                 for event in timeline.events:
-                    if event.event_type == self.filter_type:
-                        if self.filter_type == 'protocol':
-                            important_protocols = {'HTTP', 'HTTPS', 'DNS', 'TLS', 'SSH', 'FTP', 'SMTP'}
-                            if event.value not in important_protocols:
-                                continue
-                        events_by_value[event.value].append(event)
-            
-            # Find correlations within each value group
-            for value, events in events_by_value.items():
-                if len(events) < 2:
-                    continue
-                
-                # Only compare events from different PCAPs
-                for i, event1 in enumerate(events):
-                    for event2 in events[i+1:]:
-                        if event1.pcap_name != event2.pcap_name:
-                            time_diff = abs((event1.timestamp - event2.timestamp).total_seconds())
-                            self.all_correlations.append((event1, event2, time_diff))
-            
-            # Sort by time difference
+                    key = (event.event_type, event.value)
+                    events_by_key[key].append(event)
+                    pcaps_by_key[key].add(event.pcap_name)
+
+            # Determine visible set and build correlation pairs
+            visible_events = set()
+
+            if self.filter_mode == 'found_in_both':
+                for key, evs in events_by_key.items():
+                    if len(pcaps_by_key[key]) < 2:
+                        continue
+                    visible_events.update(evs)
+                    for i, e1 in enumerate(evs):
+                        for e2 in evs[i+1:]:
+                            if e1.pcap_name != e2.pcap_name:
+                                dt = abs((e1.timestamp - e2.timestamp).total_seconds())
+                                self.all_correlations.append((e1, e2, dt))
+            else:  # found_multiple_times
+                for key, evs in events_by_key.items():
+                    if len(evs) < 2:
+                        continue
+                    visible_events.update(evs)
+                    for i, e1 in enumerate(evs):
+                        for e2 in evs[i+1:]:
+                            dt = abs((e1.timestamp - e2.timestamp).total_seconds())
+                            self.all_correlations.append((e1, e2, dt))
+
             self.all_correlations.sort(key=lambda x: x[2])
-            
-            # Apply limit
+
+            # Build grouped_visible from the filtered set
+            for timeline in self.pcap_timelines:
+                for event in timeline.events:
+                    if event in visible_events:
+                        key = (event.event_type, event.value)
+                        self.grouped_visible[key][timeline.pcap_name].append(event)
+
+            # Push visibility filter down to each timeline widget
+            for timeline in self.pcap_timelines:
+                tl_visible = {e for e in timeline.events if e in visible_events}
+                timeline.set_visible_events(tl_visible if tl_visible else set())
+
             self._apply_correlation_limit()
-            
-            end_time = time.time()
-            elapsed = end_time - start_time
-            
-            # Update performance label
-            total = len(self.all_correlations)
-            self.perf_label.setText(f"Found in {elapsed:.2f}s")
-            
+            self.perf_label.setText(f"Found in {time.time() - t0:.2f}s")
+
         except Exception as e:
             print(f"Error finding correlations: {e}")
+            import traceback; traceback.print_exc()
     
-    def _update_correlation_table(self):
-        
-        # Update table with current correlations
-        try:
-            self.correlation_table.setRowCount(0)
-            self.correlation_table.setSortingEnabled(False)
-            
-            if self.correlations:
-                self.correlation_table.setRowCount(len(self.correlations))
-                
-                for row, (event1, event2, time_diff) in enumerate(self.correlations):
-                    value_item = QTableWidgetItem(str(event1.value))
-                    value_item.setToolTip(f"Full value: {event1.value}")
-                    self.correlation_table.setItem(row, 0, value_item)
-                    
-                    pcap1_item = QTableWidgetItem(event1.pcap_name)
-                    pcap1_item.setToolTip(f"File: {event1.pcap_name}\nTime: {event1.timestamp.strftime('%H:%M:%S')}")
-                    self.correlation_table.setItem(row, 1, pcap1_item)
-                    
-                    pcap2_item = QTableWidgetItem(event2.pcap_name)
-                    pcap2_item.setToolTip(f"File: {event2.pcap_name}\nTime: {event2.timestamp.strftime('%H:%M:%S')}")
-                    self.correlation_table.setItem(row, 2, pcap2_item)
-                    
-                    time_item = QTableWidgetItem(f"{time_diff:.2f}")
-                    time_item.setData(Qt.UserRole, time_diff)
-                    time_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
-                    time_item.setToolTip(f"Time difference: {time_diff:.2f} seconds")
-                    self.correlation_table.setItem(row, 3, time_item)
-                
-                self.correlation_table.setSortingEnabled(True)
-                
+    def highlight_group(self, event_type, value):
+
+        # Highlight all events matching type and value across every timeline and scroll to first
+        first_event = None
+        correlated_events = []
+
+        for timeline in self.pcap_timelines:
+            matching = [e for e in timeline.events
+                        if e.event_type == event_type and e.value == value]
+            if matching:
+                timeline.set_highlighted_events(matching)
+                if first_event is None:
+                    first_event = matching[0]
+                for e in matching:
+                    correlated_events.append({'event': e, 'filename': timeline.pcap_name})
             else:
-                self.correlation_table.setRowCount(1)
-                no_results_item = QTableWidgetItem(f"No correlations found for {self.filter_type}")
-                no_results_item.setTextAlignment(Qt.AlignCenter)
-                no_results_item.setForeground(QColor(THEME['text_secondary']))
-                self.correlation_table.setItem(0, 0, no_results_item)
-                self.correlation_table.setSpan(0, 0, 1, 4)
-            
-        except Exception as e:
-            print(f"Error updating table: {e}")
-    
-    def _on_correlation_selected(self):
-        try:
-            selected_rows = self.correlation_table.selectedIndexes()
-            if not selected_rows or not self.correlations:
-                for timeline in self.pcap_timelines:
-                    timeline.clear_highlights()
-                return
-            
-            row = selected_rows[0].row()
-            if row < len(self.correlations):
-                event1, event2, time_diff = self.correlations[row]
-                
-                for timeline in self.pcap_timelines:
-                    if timeline.pcap_name == event1.pcap_name:
-                        timeline.set_highlighted_events([event1])
-                        self._scroll_to_event(event1)
-                    elif timeline.pcap_name == event2.pcap_name:
-                        timeline.set_highlighted_events([event2])
-                    else:
-                        timeline.clear_highlights()
-                
-        except Exception as e:
-            print(f"Error handling correlation selection: {e}")
-    
+                timeline.clear_highlights()
+
+        if first_event:
+            self._scroll_to_event(first_event)
+
+        # Show or refresh the info panel with all occurrences
+        if correlated_events:
+            self.info_panel.display_events(correlated_events, navigate_callback=self.navigate_to_event)
+            self.info_panel.show()
+            self.info_panel.raise_()
+            panel_width = 280
+            panel_height = min(350, self.height() - 80)
+            self.info_panel.setGeometry(self.width() - panel_width - 15, 70, panel_width, panel_height)
+
     def _scroll_to_event(self, event):
         scrollbar = self.scroll.horizontalScrollBar()
         viewport_width = self.scroll.viewport().width()
@@ -1329,7 +1347,7 @@ class CrossPCAPTimelineWidget(QFrame):
             for timeline in self.pcap_timelines:
                 timeline.clear_highlights()
             
-            # Highlight all matching events (in case same event appears in multiple PCAPs)
+            # Highlight all matching events 
             for event, timeline, _ in matching_events:
                 timeline.set_highlighted_events([event])
             
@@ -1342,6 +1360,55 @@ class CrossPCAPTimelineWidget(QFrame):
             print(f"Error in highlight_event: {e}")
             import traceback
             traceback.print_exc()
+    
+    def navigate_to_event(self, event_data):
+
+        # Scroll to a specific event card clicked in the info panel and focus that lane only
+        event = event_data['event']
+        filename = event_data['filename']
+        for timeline in self.pcap_timelines:
+            if timeline.pcap_name == filename:
+                timeline.set_highlighted_events([event])
+                self._scroll_to_event(event)
+            else:
+                timeline.clear_highlights()
+
+    def on_timeline_event_clicked(self, event, pcap_name):
+
+        # Show or refresh the info panel when a timeline node is clicked
+        print(f"\n=== Timeline Event Clicked ===")
+        print(f"Event: {event.value} ({event.event_type})")
+        print(f"PCAP: {pcap_name}")
+        
+        # Collect all events with the same type and value across every PCAP
+        correlated_events = []
+        for timeline in self.pcap_timelines:
+            for e in timeline.events:
+                if e.value == event.value and e.event_type == event.event_type:
+                    correlated_events.append({
+                        'event': e,
+                        'filename': timeline.pcap_name
+                    })
+        
+        print(f"Found {len(correlated_events)} correlated events")
+        
+        if correlated_events:
+            # Refresh the panel, display_events clears and repopulates automatically
+            self.info_panel.display_events(correlated_events, navigate_callback=self.navigate_to_event)
+            self.info_panel.show()
+            self.info_panel.raise_()
+            
+            panel_width = 280
+            panel_height = min(350, self.height() - 80)
+            self.info_panel.setGeometry(self.width() - panel_width - 15, 70, panel_width, panel_height)
+            
+            # Highlight all instances across every timeline
+            for timeline in self.pcap_timelines:
+                matching = [e for e in timeline.events if e.value == event.value and e.event_type == event.event_type]
+                if matching:
+                    timeline.set_highlighted_events(matching)
+        
+        print("=== End Event Click ===\n")
     
     def clear_timeline(self):
         
@@ -1375,7 +1442,6 @@ class CrossPCAPTimelineWidget(QFrame):
                 no_data_label.setStyleSheet(f"color: {THEME['text_secondary']}; padding: 20px;")
                 self.timeline_layout.addWidget(no_data_label)
                 
-                self.correlation_table.setRowCount(0)
                 self.correlation_count_label.setText("0 correlations")
                 self.minimap.hide()
                 return
@@ -1416,3 +1482,199 @@ class CrossPCAPTimelineWidget(QFrame):
             
         except Exception as e:
             print(f"Error loading timeline data: {e}")
+
+
+# Clickable event card, clicking navigates the timeline to that specific event
+class ClickableEventCard(QFrame):
+    def __init__(self, event_data, navigate_callback, parent=None):
+        super().__init__(parent)
+        self._event_data = event_data
+        self._navigate_callback = navigate_callback
+        self.setCursor(Qt.PointingHandCursor)
+        self._base_style = f"""
+            QFrame {{
+                background-color: {THEME['surface']};
+                border: 1px solid {THEME['border']};
+                border-radius: 4px;
+                padding: 5px;
+            }}
+        """
+        self._hover_style = f"""
+            QFrame {{
+                background-color: {THEME['surface_elevated']};
+                border: 1px solid {THEME['accent']};
+                border-radius: 4px;
+                padding: 5px;
+            }}
+        """
+        self.setStyleSheet(self._base_style)
+
+    def enterEvent(self, event):
+        self.setStyleSheet(self._hover_style)
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        self.setStyleSheet(self._base_style)
+        super().leaveEvent(event)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton and self._navigate_callback:
+            self._navigate_callback(self._event_data)
+        super().mousePressEvent(event)
+
+
+# Info panel overlay showing correlated event details
+class TimelineInfoPanel(QFrame):
+    
+    def __init__(self, parent):
+        super().__init__(parent)
+        
+        self.setStyleSheet(f"""
+            QFrame {{
+                background-color: {THEME['surface_elevated']};
+                border: 2px solid {THEME['accent']};
+                border-radius: 6px;
+            }}
+        """)
+        
+        # Enable drop shadow effect
+        self.setAutoFillBackground(True)
+        
+        layout = QVBoxLayout()
+        layout.setContentsMargins(8, 8, 8, 8)  # Tighter margins
+        layout.setSpacing(6)  # Tighter spacing
+        
+        # Header with close button
+        header = QHBoxLayout()
+        title = QLabel("Correlated Events")
+        title.setStyleSheet(f"""
+            color: {THEME['text_primary']};
+            font-weight: bold;
+            font-size: 11px;
+        """)
+        header.addWidget(title)
+        
+        header.addStretch()
+        
+        close_btn = QPushButton("✕")
+        close_btn.setFixedSize(18, 18)
+        close_btn.clicked.connect(self.hide)
+        close_btn.setCursor(Qt.PointingHandCursor)
+        close_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: transparent;
+                border: none;
+                color: {THEME['text_secondary']};
+                font-size: 14px;
+                font-weight: bold;
+            }}
+            QPushButton:hover {{
+                color: {THEME['accent']};
+                background-color: {THEME['surface']};
+                border-radius: 9px;
+            }}
+        """)
+        header.addWidget(close_btn)
+        layout.addLayout(header)
+        
+        # Separator
+        separator = QFrame()
+        separator.setFrameShape(QFrame.HLine)
+        separator.setFixedHeight(1)
+        separator.setStyleSheet(f"background-color: {THEME['border']};")
+        layout.addWidget(separator)
+        
+        # Scrollable content area
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setStyleSheet("""
+            QScrollArea {
+                border: none;
+                background-color: transparent;
+            }
+        """)
+        
+        self.content_widget = QWidget()
+        self.content_layout = QVBoxLayout(self.content_widget)
+        self.content_layout.setSpacing(6)  # Tighter spacing
+        scroll.setWidget(self.content_widget)
+        
+        layout.addWidget(scroll)
+        
+        self.setLayout(layout)
+        self._navigate_callback = None
+    
+    def display_events(self, events, navigate_callback=None):
+
+        # Populate the panel, clears previous content and rebuilds from the new event list
+        self._navigate_callback = navigate_callback
+
+        # Clear previous content
+        while self.content_layout.count():
+            child = self.content_layout.takeAt(0)
+            if child.widget():
+                child.widget().deleteLater()
+        
+        if not events:
+            return
+        
+        # Summary
+        summary = QLabel(f"{len(events)} occurrence(s) — click an event to focus it")
+        summary.setStyleSheet(f"""
+            color: {THEME['text_secondary']};
+            font-size: 9px;
+            padding: 2px 0px;
+        """)
+        self.content_layout.addWidget(summary)
+        
+        # Show each event, compact cards
+        for i, event_data in enumerate(events):
+            event_card = self._create_event_card(event_data, i + 1)
+            self.content_layout.addWidget(event_card)
+        
+        self.content_layout.addStretch()
+    
+    def _create_event_card(self, event_data, number):
+
+        # Build a single clickable card showing the event details
+        event = event_data['event']
+        filename = event_data['filename']
+        
+        card = ClickableEventCard(event_data, self._navigate_callback)
+        card_layout = QVBoxLayout(card)
+        card_layout.setSpacing(2)
+        card_layout.setContentsMargins(4, 4, 4, 4)
+        
+        # Header row: number + focus hint
+        header_row = QHBoxLayout()
+        number_label = QLabel(f"#{number}")
+        number_label.setStyleSheet(f"color: {THEME['accent']}; font-weight: bold; font-size: 9px;")
+        header_row.addWidget(number_label)
+        header_row.addStretch()
+        focus_hint = QLabel("→ focus")
+        focus_hint.setStyleSheet(f"color: {THEME['text_secondary']}; font-size: 8px;")
+        header_row.addWidget(focus_hint)
+        card_layout.addLayout(header_row)
+        
+        self._add_detail(card_layout, "File:", filename)
+        self._add_detail(card_layout, "Type:", event.event_type.upper())
+        self._add_detail(card_layout, "Value:", event.value)
+        self._add_detail(card_layout, "Time:", event.timestamp.strftime('%H:%M:%S'))
+        
+        return card
+    
+    def _add_detail(self, layout, label, value):
+
+        # Add a label/value row to the card layout, truncates long values
+        if len(str(value)) > 35:
+            display_value = str(value)[:32] + "..."
+        else:
+            display_value = str(value)
+        
+        row = QLabel(f"<span style='color: {THEME['text_secondary']};'>{label}</span> <b>{display_value}</b>")
+        row.setWordWrap(True)
+        row.setStyleSheet(f"""
+            color: {THEME['text_primary']};
+            font-size: 9px;
+        """)
+        layout.addWidget(row)

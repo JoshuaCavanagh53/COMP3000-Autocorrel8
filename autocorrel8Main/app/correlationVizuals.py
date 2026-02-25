@@ -5,6 +5,7 @@ from PyQt5.QtWidgets import ( QWidget, QLabel,
 )
 from PyQt5.QtCore import Qt, QRect, QPoint, QTimer
 from PyQt5.QtGui import QPainter, QColor, QPen, QBrush, QFont
+from collections import defaultdict
 from datetime import datetime, timedelta
 
 from distributionChart import *
@@ -143,25 +144,57 @@ class CorrelationTableWidget(QFrame):
         layout.setContentsMargins(5, 5, 5, 5)
         layout.setSpacing(5)
         
-        # Table title
+        # Title row with mode filter combo
+        title_row = QHBoxLayout()
         title = QLabel("Correlations Found")
         title.setStyleSheet(f"""
             color: {THEME['text_primary']};
             font-size: 14px;
             font-weight: bold;
         """)
-        layout.addWidget(title)
+        title_row.addWidget(title)
+        title_row.addStretch()
         
-        # Create table
+        mode_label = QLabel("Show:")
+        mode_label.setStyleSheet(f"color: {THEME['text_secondary']}; font-size: 11px;")
+        title_row.addWidget(mode_label)
+        
+        self.mode_combo = QComboBox()
+        self.mode_combo.addItems(['Found in Both', 'Found Multiple Times'])
+        self.mode_combo.setToolTip(
+            "Found in Both, only events that appear across multiple PCAPs\n"
+            "Found Multiple Times, any event with more than one occurrence"
+        )
+        self.mode_combo.setStyleSheet(f"""
+            QComboBox {{
+                background-color: {THEME['button_bg']};
+                color: {THEME['text_primary']};
+                border: 1px solid {THEME['border']};
+                border-radius: 4px;
+                padding: 3px 8px;
+                font-size: 11px;
+                min-width: 160px;
+            }}
+            QComboBox::drop-down {{ border: none; }}
+            QComboBox QAbstractItemView {{
+                background-color: {THEME['button_bg']};
+                color: {THEME['text_primary']};
+                selection-background-color: {THEME['accent']};
+            }}
+        """)
+        self.mode_combo.currentTextChanged.connect(self._on_mode_changed)
+        title_row.addWidget(self.mode_combo)
+        layout.addLayout(title_row)
+        
+        # Table — Value / Type / Count / Sources
         self.table = QTableWidget()
         self.table.setColumnCount(4)
-        self.table.setHorizontalHeaderLabels(["Timestamp", "Type", "Value", "Sources"])
+        self.table.setHorizontalHeaderLabels(["Value", "Type", "Count", "Sources"])
         
-        # Enable single row selection
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         
-        # Table styling
         self.table.setStyleSheet(f"""
             QTableWidget {{
                 background-color: {THEME['surface']};
@@ -186,117 +219,143 @@ class CorrelationTableWidget(QFrame):
             }}
         """)
         
-        # Set column widths
         self.table.horizontalHeader().setStretchLastSection(True)
-        self.table.setColumnWidth(0, 150)  # Timestamp
-        self.table.setColumnWidth(1, 100)  # Type
-        self.table.setColumnWidth(2, 200)  # Value
-        
-        # Hide vertical header
+        self.table.setColumnWidth(0, 200)  # Value
+        self.table.setColumnWidth(1, 80)   # Type
+        self.table.setColumnWidth(2, 55)   # Count
         self.table.verticalHeader().setVisible(False)
         
-        # Connect row selection to timeline highlighting
         self.table.itemSelectionChanged.connect(self.on_row_selected)
-        
         layout.addWidget(self.table)
         
-        # Store timeline widget reference
+        # Internal state
         self.timeline_widget = None
-        
-        # Store events data for selection
-        self.events_list = []
+        self.current_rows = []       # rows currently displayed, for selection lookups
+        self.grouped_both = {}       # (type, value) → entry dict — appears in 2 or more PCAPs
+        self.grouped_multiple = {}   # (type, value) → entry dict — appears 2 or more times anywhere
         
         self.setLayout(layout)
     
     def load_data(self, timeline_data):
-        # Load correlation data into table
-        self.table.setRowCount(0)  # Clear existing rows
-        
+
+        # Receive fresh timeline data, recompute groups, and refresh the table
         if not timeline_data:
+            self.grouped_both = {}
+            self.grouped_multiple = {}
+            self.current_rows = []
+            self.table.setRowCount(0)
             return
         
-        # Group events by (type, value) to collect all sources
-        grouped_events = {}
+        # Build per-key counts across PCAPs
+        events_by_key = defaultdict(lambda: defaultdict(list))  # key, pcap, [events]
         
         for filename, events in timeline_data.items():
             for event in events:
                 key = (event.event_type, event.value)
-                
-                if key not in grouped_events:
-                    grouped_events[key] = {
-                        'timestamp': event.timestamp,
-                        'type': event.event_type,
-                        'value': event.value,
-                        'sources': set()
-                    }
-                else:
-                    # Keep the earliest timestamp
-                    if event.timestamp < grouped_events[key]['timestamp']:
-                        grouped_events[key]['timestamp'] = event.timestamp
-                
-                # Add source to the set (automatically handles duplicates)
-                grouped_events[key]['sources'].add(event.pcap_name)
+                events_by_key[key][event.pcap_name].append(event)
         
+        self.grouped_both = {}
+        self.grouped_multiple = {}
         
-        # Filter to only show correlations found in multiple PCAPs
-        events_list = [event for event in grouped_events.values() if len(event['sources']) > 1]
+        for key, pcap_dict in events_by_key.items():
+            total = sum(len(evs) for evs in pcap_dict.values())
+            entry = {
+                'type': key[0],
+                'value': key[1],
+                'key': key,
+                'pcaps': dict(pcap_dict),
+                'count': total,
+                'sources': set(pcap_dict.keys()),
+            }
+            if len(pcap_dict) >= 2:
+                self.grouped_both[key] = entry
+            if total >= 2:
+                self.grouped_multiple[key] = entry
         
-        # Sort by timestamp
-        events_list.sort(key=lambda x: x['timestamp'])
+        self._apply_filter()
+    
+    def _apply_filter(self):
+
+        # Populate the table rows based on the current mode combo selection
+        mode = self.mode_combo.currentText()
+        grouped = self.grouped_both if mode == 'Found in Both' else self.grouped_multiple
         
-        # Store for selection handling
-        self.events_list = events_list
+        # Sort: count desc, then value alphabetically
+        rows = sorted(grouped.values(), key=lambda x: (-x['count'], str(x['value'])))
+        self.current_rows = rows
         
-        # Populate table
-        self.table.setRowCount(len(events_list))
-        for row, event in enumerate(events_list):
-            # Timestamp
-            timestamp_str = event['timestamp'].strftime('%Y-%m-%d %H:%M:%S')
-            self.table.setItem(row, 0, QTableWidgetItem(timestamp_str))
+        self.table.setSortingEnabled(False)
+        self.table.setRowCount(0)
+        
+        if not rows:
+            self.table.setRowCount(1)
+            item = QTableWidgetItem("No correlations found")
+            item.setTextAlignment(Qt.AlignCenter)
+            item.setForeground(QColor(THEME['text_secondary']))
+            self.table.setItem(0, 0, item)
+            self.table.setSpan(0, 0, 1, 4)
+            return
+        
+        self.table.setRowCount(len(rows))
+        for row, entry in enumerate(rows):
+            # Value
+            value_item = QTableWidgetItem(str(entry['value']))
+            value_item.setToolTip(str(entry['value']))
+            value_item.setData(Qt.UserRole, entry['key'])
+            self.table.setItem(row, 0, value_item)
             
             # Type
-            self.table.setItem(row, 1, QTableWidgetItem(event['type']))
+            self.table.setItem(row, 1, QTableWidgetItem(entry['type'].upper()))
             
-            # Value
-            self.table.setItem(row, 2, QTableWidgetItem(str(event['value'])))
+            # Count (colour-coded)
+            count_item = QTableWidgetItem(str(entry['count']))
+            count_item.setTextAlignment(Qt.AlignCenter | Qt.AlignVCenter)
+            if entry['count'] >= 10:
+                count_item.setForeground(QColor("#FF4444"))
+            elif entry['count'] >= 4:
+                count_item.setForeground(QColor("#FFA500"))
+            else:
+                count_item.setForeground(QColor(THEME['accent']))
+            self.table.setItem(row, 2, count_item)
             
-            # Sources - combine all sources with comma separation
-            sources_str = ', '.join(sorted(event['sources']))
-            self.table.setItem(row, 3, QTableWidgetItem(sources_str))
-    
-    def set_timeline_widget(self, timeline_widget):
+            # Sources
+            sources_str = ', '.join(sorted(entry['sources']))
+            sources_item = QTableWidgetItem(sources_str)
+            sources_item.setToolTip(sources_str)
+            self.table.setItem(row, 3, sources_item)
         
-        # Store reference to timeline widget for event highlighting
+        self.table.setSortingEnabled(True)
+    
+    def _on_mode_changed(self, label):
+
+        # Re-filter the table and sync the timeline to show matching events
+        self._apply_filter()
+        if self.timeline_widget:
+            self.timeline_widget.filter_mode = (
+                'found_in_both' if label == 'Found in Both' else 'found_multiple_times'
+            )
+            self.timeline_widget._find_correlations()
+
+    def set_timeline_widget(self, timeline_widget):
+
+        # Store reference to the timeline widget for highlighting and panel sync
         self.timeline_widget = timeline_widget
     
     def on_row_selected(self):
-        
-        # Handle row selection and highlight corresponding event on timeline
-   
+
+        # Handle row selection, highlight matching events and open the info panel
         selected_rows = self.table.selectionModel().selectedRows()
-      
-        # Get the first selected row
-        row = selected_rows[0].row()
-        print(f"Selected row index: {row}")
+        if not selected_rows:
+            return
         
-        if row < len(self.events_list):
-            event = self.events_list[row]
-            print(f"Event to highlight: {event['type']} - {event['value']} at {event['timestamp']}")
-            
-            # Check if timeline widget has highlight_event method
-            if hasattr(self.timeline_widget, 'highlight_event'):
-                print("Calling timeline_widget.highlight_event()")
-                # Highlight the event on the timeline
-                # Pass timestamp, type, and value to identify the event
-                self.timeline_widget.highlight_event(
-                    event['timestamp'],
-                    event['type'],
-                    event['value']
-                )
-            else:
-                print("ERROR: timeline_widget does not have 'highlight_event' method!")
-        else:
-            print(f"Row {row} is out of range (events_list has {len(self.events_list)} items)")
+        row = selected_rows[0].row()
+        if row >= len(self.current_rows):
+            return
+        
+        entry = self.current_rows[row]
+        
+        if self.timeline_widget and hasattr(self.timeline_widget, 'highlight_group'):
+            self.timeline_widget.highlight_group(entry['type'], entry['value'])
         
 
 
@@ -444,56 +503,64 @@ class IncognitoGapWidget(QFrame):
         
         for row, gap in enumerate(gap_data):
             
-            # Domain
+            # Column Domain
             domain_item = QTableWidgetItem(gap['domain'])
             self.gap_table.setItem(row, 0, domain_item)
             
-            # Score (color-coded)
+            # Column Score 
             score = gap['suspiciousness']
             score_item = QTableWidgetItem(str(score))
             
             if score >= 60:
-                score_item.setForeground(QColor("#FF4444"))  # Red
+                score_item.setForeground(QColor("#FF4444"))
             elif score >= 30:
-                score_item.setForeground(QColor("#FFA500"))  # Orange
+                score_item.setForeground(QColor("#FFA500"))
             else:
-                score_item.setForeground(QColor("#888888"))  # Gray
+                score_item.setForeground(QColor("#888888"))
             
             self.gap_table.setItem(row, 1, score_item)
             
-            # Count
+            # Column Count
             count_item = QTableWidgetItem(str(gap['count']))
             self.gap_table.setItem(row, 2, count_item)
             
-            # Category
+            # Column Category
             category_item = QTableWidgetItem(gap['category'])
             self.gap_table.setItem(row, 3, category_item)
             
-            # First Seen
+            # Column First Seen
             first_seen_str = gap['first_seen'].strftime('%Y-%m-%d %H:%M:%S')
             first_seen_item = QTableWidgetItem(first_seen_str)
             self.gap_table.setItem(row, 4, first_seen_item)
             
-            # Last Seen 
+            # Column Last Seen
             last_seen_str = gap['last_seen'].strftime('%Y-%m-%d %H:%M:%S')
             last_seen_item = QTableWidgetItem(last_seen_str)
             self.gap_table.setItem(row, 5, last_seen_item)
             
-            # Duration 
+            # Column Duration 
             duration = gap['last_seen'] - gap['first_seen']
-            
-            # Format duration nicely
             total_seconds = int(duration.total_seconds())
-            if total_seconds < 60:
+            
+            # Duration
+            if total_seconds == 0:
+                duration_str = "< 1s" 
+            elif total_seconds < 60:
                 duration_str = f"{total_seconds}s"
             elif total_seconds < 3600:
                 minutes = total_seconds // 60
                 seconds = total_seconds % 60
-                duration_str = f"{minutes}m {seconds}s"
+                if seconds == 0:
+                    duration_str = f"{minutes}m"
+                else:
+                    duration_str = f"{minutes}m {seconds}s"
             else:
                 hours = total_seconds // 3600
                 minutes = (total_seconds % 3600) // 60
-                duration_str = f"{hours}h {minutes}m"
+                if minutes == 0:
+                    duration_str = f"{hours}h"
+                else:
+                    duration_str = f"{hours}h {minutes}m"
             
             duration_item = QTableWidgetItem(duration_str)
             self.gap_table.setItem(row, 6, duration_item)
