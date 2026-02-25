@@ -1,3 +1,5 @@
+from calendar import c
+
 from PyQt5.QtWidgets import (
     QWidget, QLabel, QPushButton, QVBoxLayout, QHBoxLayout, QFrame,
     QScrollArea, QComboBox, QSlider, QTableWidget, QHeaderView, 
@@ -7,6 +9,7 @@ from PyQt5.QtCore import Qt, QRect, QPoint, QTimer
 from PyQt5.QtGui import QPainter, QColor, QPen, QBrush, QFont, QWheelEvent
 from datetime import timedelta
 from collections import defaultdict
+from correlationVizuals import *
 
 from themes import THEME
 
@@ -19,6 +22,7 @@ class TimelineEvent:
         self.pcap_name = pcap_name
         self.x_pos = 0
         self.normalized_ts = 0
+        self.protocol = None 
 
 
 # Event cluster for grouping nearby events
@@ -29,26 +33,36 @@ class EventCluster:
         self.x_end = x_end
         self.x_center = (x_start + x_end) // 2
         self.count = len(events)
-        self.expanded = False  # Track expansion state
-    
+        self.expanded = False
+        # Stored after each paint 
+        self._expanded_rect = None   
+        self._dot_positions = []    
+
     def toggle_expansion(self):
-        
+
         # Toggle between expanded and collapsed state
         self.expanded = not self.expanded
+        if not self.expanded:
+            # Clear cached geometry so stale rects can't trigger false hits
+            self._expanded_rect = None
+            self._dot_positions = []
         return self.expanded
-    
+
     def contains_point(self, x, y, timeline_y, threshold=10):
-        
+
         # Check if a point is within the cluster bounds
         if not self.expanded:
-            # Collapsed cluster check if click is within the bar
+            # Collapsed: check if click lands on the bar
             return (self.x_start - threshold <= x <= self.x_end + threshold and
                     timeline_y - 15 <= y <= timeline_y + 15)
         else:
-            # Expanded cluster larger vertical area
+            # Expanded: use the actual painted rect so the hit area matches visually
+            if self._expanded_rect:
+                rx, ry, rw, rh = self._expanded_rect
+                return rx <= x <= rx + rw and ry <= y <= ry + rh
+            # Fallback before first paint
             return (self.x_start - threshold <= x <= self.x_end + threshold and
-                    timeline_y - 40 <= y <= timeline_y + 40)
-
+                    timeline_y - 60 <= y <= timeline_y + 60)
 
 # Minimap widget showing full timeline overview
 class TimelineMinimap(QWidget):
@@ -78,6 +92,10 @@ class TimelineMinimap(QWidget):
         
         painter.fillRect(self.rect(), QColor(THEME['timeline_bg']))
         
+        # Don't draw anything meaningful until times are set
+        if self.start_time is None or self.end_time is None:
+            return
+
         painter.setPen(QPen(QColor(THEME['border']), 1))
         painter.drawRect(0, 0, self.width()-1, self.height()-1)
         
@@ -89,7 +107,7 @@ class TimelineMinimap(QWidget):
         visible_x1 = 10 + int(bar_width * self.visible_start)
         visible_x2 = 10 + int(bar_width * self.visible_end)
         
-        painter.fillRect(visible_x1, bar_y - 8, visible_x2 - visible_x1, 16, 
+        painter.fillRect(visible_x1, bar_y - 8, visible_x2 - visible_x1, 16,
                         QColor(THEME['accent']).lighter(150))
         painter.setPen(QPen(QColor(THEME['accent']), 2))
         painter.drawRect(visible_x1, bar_y - 8, visible_x2 - visible_x1, 16)
@@ -100,41 +118,16 @@ class TimelineMinimap(QWidget):
         painter.setFont(font)
         
         start_str = self.start_time.strftime("%Y-%m-%d %H:%M:%S")
-        end_str = self.end_time.strftime("%Y-%m-%d %H:%M:%S")
+        end_str   = self.end_time.strftime("%Y-%m-%d %H:%M:%S")
         
-        painter.drawText(QRect(10, 0, 150, bar_y - 10), 
+        painter.drawText(QRect(10, 0, 150, bar_y - 10),
                         Qt.AlignLeft | Qt.AlignBottom, start_str)
-        painter.drawText(QRect(self.width() - 160, 0, 150, bar_y - 10), 
+        painter.drawText(QRect(self.width() - 160, 0, 150, bar_y - 10),
                         Qt.AlignRight | Qt.AlignBottom, end_str)
-    
-    # Check if the user is dragging the timeline scroller
-    def mousePressEvent(self, event):
-        if event.button() == Qt.LeftButton:
-            self.dragging = True
-            self.drag_start_x = event.x()
-            self._jump_to_position(event.x())
-    
-    def mouseMoveEvent(self, event):
-        if self.dragging:
-            self._jump_to_position(event.x())
-    
-    def mouseReleaseEvent(self, event):
-        if event.button() == Qt.LeftButton:
-            self.dragging = False
-    
-    # Move timeline view to the scrolled location 
-    def _jump_to_position(self, x):
-        bar_width = self.width() - 20
-        clicked_pct = (x - 10) / bar_width
-        clicked_pct = max(0.0, min(1.0, clicked_pct))
-        
-        if hasattr(self.parent(), 'jump_to_position'):
-            self.parent().jump_to_position(clicked_pct)
-
 
 # Optimized timeline with clustering
 class PCAPTimeline(QWidget):
-    def __init__(self, pcap_name, events, start_time, end_time, height=120, pixels_per_second=50):
+    def __init__(self, pcap_name, events, start_time, end_time, height=120, pixels_per_second=10):
         super().__init__()
         self.pcap_name = pcap_name
         self.events = events
@@ -265,53 +258,59 @@ class PCAPTimeline(QWidget):
         self.update()
     
     def mousePressEvent(self, event):
-        
+
         # Handle mouse clicks on events first, then clusters
         if event.button() != Qt.LeftButton:
             return
-        
-        mouse_x = event.x()
-        mouse_y = event.y()
+
+        mouse_x    = event.x()
+        mouse_y    = event.y()
         timeline_y = self.timeline_height // 2
-        
-        # Check invidual events first
+
+        # Events inside collapsed clusters shouldn't intercept clicks meant for the cluster bar
+        clustered_events = set()
+        for cluster in self.clusters:
+            if not cluster.expanded:
+                clustered_events.update(cluster.events)
+
+        # Check individual events on the open timeline
         for event_obj in self.events:
+            if event_obj in clustered_events:
+                continue
             if self.visible_event_set is not None and event_obj not in self.visible_event_set:
                 continue
-            distance_x = abs(mouse_x - event_obj.x_pos)
-            distance_y = abs(mouse_y - timeline_y)
-            
-            if distance_x < 15 and distance_y < 25:  # Click area
-                print(f"✓ CLICKED EVENT: {event_obj.value}")
-                
-                # Notify parent
+            if abs(mouse_x - event_obj.x_pos) < 15 and abs(mouse_y - timeline_y) < 25:
                 parent = self.parent()
                 while parent and not hasattr(parent, 'on_timeline_event_clicked'):
                     parent = parent.parent()
-                
                 if parent and hasattr(parent, 'on_timeline_event_clicked'):
                     parent.on_timeline_event_clicked(event_obj, self.pcap_name)
-                
                 event.accept()
                 return
-        
-        # Theb check if click is on a cluster 
+
+        # Check dots inside expanded clusters using their painted positions
+        DOT_HIT_R = 8
+        for cluster in self.clusters:
+            if not cluster.expanded:
+                continue
+            for (cx, cy, event_obj) in cluster._dot_positions:
+                if abs(mouse_x - cx) <= DOT_HIT_R and abs(mouse_y - cy) <= DOT_HIT_R:
+                    parent = self.parent()
+                    while parent and not hasattr(parent, 'on_timeline_event_clicked'):
+                        parent = parent.parent()
+                    if parent and hasattr(parent, 'on_timeline_event_clicked'):
+                        parent.on_timeline_event_clicked(event_obj, self.pcap_name)
+                    event.accept()
+                    return
+
+        # 3. Check the cluster box itself, only reached if no dot was hit
         for cluster in self.clusters:
             if cluster.contains_point(mouse_x, mouse_y, timeline_y):
-                # Toggle cluster expansion
-                was_expanded = cluster.toggle_expansion()
-                
-                print(f"\n=== Cluster Click ===")
-                print(f"Cluster with {cluster.count} events")
-                print(f"State: {'Expanded' if cluster.expanded else 'Collapsed'}")
-                print(f"=== End Click ===\n")
-                
-                # Redraw to show expansion
+                cluster.toggle_expansion()
                 self.update()
                 event.accept()
                 return
-        
-        # If no event or cluster was clicked, let the event propagate
+
         super().mousePressEvent(event)
 
     def paintEvent(self, event):
@@ -439,70 +438,85 @@ class PCAPTimeline(QWidget):
             self._draw_expanded_cluster(painter, cluster, timeline_y, is_hovered)
 
     def _draw_expanded_cluster(self, painter, cluster, timeline_y, is_hovered):
-        
-        # Draw an expanded cluster showing individual events
-        # Draw background box
-        width = max(80, cluster.x_end - cluster.x_start + 40)
-        height = 70
-        
-        box_color = QColor(THEME['surface_elevated']).lighter(105)
-        painter.setBrush(QBrush(box_color))
+
+        # Draw an expanded cluster showing individual events in an even grid
+        # Layout constants
+        DOT_R       = 5    # dot radius
+        COL_SPACING = 22   # horizontal gap between dot centres
+        ROW_SPACING = 22   # vertical gap between dot centres
+        H_PAD       = 14   # horizontal padding inside the box
+        V_PAD_TOP   = 24   # space reserved at the top for the header bar
+        V_PAD_BOT   = 10   # bottom padding
+        MAX_COLS    = 10   # cap columns so the box doesn't run off screen
+
+        n    = cluster.count
+        cols = min(MAX_COLS, n)
+        rows = (n + cols - 1) // cols
+
+        # Size the box to fit the grid exactly
+        content_w = (cols - 1) * COL_SPACING if cols > 1 else 0
+        content_h = (rows - 1) * ROW_SPACING if rows > 1 else 0
+        box_w = content_w + H_PAD * 2 + DOT_R * 2
+        box_h = content_h + V_PAD_TOP + V_PAD_BOT + DOT_R * 2
+
+        # Centre the box on the cluster, clamp so it doesn't clip the label column
+        box_x = max(105, cluster.x_center - box_w // 2)
+        box_y = timeline_y - box_h // 2
+
+        # Store the painted rect so contains_point can use it for hit-testing
+        cluster._expanded_rect = (box_x, box_y, box_w, box_h)
+
+        # Draw box background
+        painter.setBrush(QBrush(QColor(THEME['surface_elevated']).lighter(105)))
         painter.setPen(QPen(QColor(THEME['accent']), 2))
-        painter.drawRoundedRect(cluster.x_start - 20, timeline_y - height//2, 
-                               width, height, 6, 6)
-        
-        # Draw Click to collapse hint at top
-        painter.setPen(QColor(THEME['text_secondary']))
+        painter.drawRoundedRect(box_x, box_y, box_w, box_h, 6, 6)
+
+        # Draw header bar, this is the collapse click target
+        header_rect = QRect(box_x, box_y, box_w, V_PAD_TOP - 2)
+        painter.fillRect(header_rect, QColor(THEME['accent']).darker(130))
         font = QFont()
         font.setPointSize(7)
+        font.setBold(True)
         painter.setFont(font)
-        painter.drawText(QRect(cluster.x_start - 15, timeline_y - height//2 + 3, width - 10, 12),
-                        Qt.AlignCenter, f"Click to collapse ({cluster.count} events)")
-        
-        # Draw individual events in a grid layout
-        events_per_row = min(10, cluster.count)
-        rows_needed = (cluster.count + events_per_row - 1) // events_per_row
-        
-        event_spacing_x = (width - 40) / max(1, events_per_row - 1) if events_per_row > 1 else 0
-        event_spacing_y = 20 if rows_needed > 1 else 0
-        
-        start_y = timeline_y - height//2 + 25
-        
-        for idx, event in enumerate(cluster.events):
-            row = idx // events_per_row
-            col = idx % events_per_row
-            
-            if events_per_row == 1:
-                event_x = cluster.x_center
-            else:
-                event_x = cluster.x_start - 10 + int(col * event_spacing_x)
-            
-            event_y = start_y + row * event_spacing_y
-            
-            # Draw the event dot
-            color = self._get_event_color(event.event_type)
-            
-            # Check if this specific event is hovered
-            mouse_pos = self.mapFromGlobal(self.cursor().pos())
-            is_event_hovered = (abs(mouse_pos.x() - event_x) < 8 and 
-                              abs(mouse_pos.y() - event_y) < 8)
-            
-            if is_event_hovered:
-                painter.setBrush(QBrush(QColor(color).lighter(130)))
-                painter.setPen(QPen(QColor(color).lighter(150), 2))
-                painter.drawEllipse(event_x - 6, event_y - 6, 12, 12)
-                
-                # Draw tooltip for hovered event in cluster
-                self._draw_tooltip(painter, event, event_x, event_y - 30)
+        painter.setPen(QColor(THEME['text_primary']))
+        painter.drawText(header_rect, Qt.AlignCenter,
+                         f"▲ Click anywhere to collapse  ({n} events)")
+
+        # Work out where the first dot centre sits
+        dots_origin_x = box_x + H_PAD + DOT_R
+        dots_origin_y = box_y + V_PAD_TOP + DOT_R
+
+        mouse_pos = self.mapFromGlobal(self.cursor().pos())
+
+        # Rebuild dot positions every paint so click detection stays in sync
+        cluster._dot_positions = []
+
+        for idx, ev in enumerate(cluster.events):
+            row = idx // cols
+            col = idx % cols
+            cx  = dots_origin_x + col * COL_SPACING
+            cy  = dots_origin_y + row * ROW_SPACING
+
+            # Store position so mousePressEvent can match clicks to events
+            cluster._dot_positions.append((cx, cy, ev))
+
+            color   = self._get_event_color(ev.event_type)
+            hovered = abs(mouse_pos.x() - cx) < DOT_R + 3 and abs(mouse_pos.y() - cy) < DOT_R + 3
+
+            if hovered:
+                painter.setBrush(QBrush(QColor(color).lighter(140)))
+                painter.setPen(QPen(QColor(color).lighter(160), 2))
+                painter.drawEllipse(cx - DOT_R - 2, cy - DOT_R - 2,
+                                    (DOT_R + 2) * 2, (DOT_R + 2) * 2)
+                self._draw_tooltip(painter, ev, cx, box_y - 10)
             else:
                 painter.setBrush(QBrush(QColor(color)))
                 painter.setPen(QPen(QColor(color).darker(120), 1))
-                painter.drawEllipse(event_x - 4, event_y - 4, 8, 8)
+                painter.drawEllipse(cx - DOT_R, cy - DOT_R, DOT_R * 2, DOT_R * 2)
     
     def _draw_cluster_tooltip(self, painter, cluster):
         
         # Draw tooltip for event cluster
-
         tooltip_text = f"Event Cluster\n{cluster.count} events\nClick to see details"
         
         font = QFont()
@@ -590,7 +604,6 @@ class PCAPTimeline(QWidget):
             'domain': THEME['event_domain'],
             'ip': THEME['event_ip'],
             'port': THEME['event_port'],
-            'protocol': THEME.get('event_protocol', THEME['accent']),
         }
         return colors.get(event_type, THEME['accent'])
 
@@ -773,7 +786,8 @@ class CrossPCAPTimelineWidget(QFrame):
         self.start_time = None
         self.end_time = None
         self.max_correlations = 500  # Limit correlations shown
-        
+        self._incognito_lane = None
+
         self.setStyleSheet(f"""
             QFrame {{
                 background-color: {THEME['surface_elevated']};
@@ -870,24 +884,7 @@ class CrossPCAPTimelineWidget(QFrame):
         self.filter_combo.currentTextChanged.connect(self._on_filter_changed)
         header_layout.addWidget(self.filter_combo)
         
-        # Refresh button
-        refresh_btn = QPushButton("Refresh")
-        refresh_btn.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {THEME['accent']};
-                color: white;
-                border: none;
-                border-radius: 4px;
-                padding: 6px 15px;
-                font-weight: 500;
-            }}
-            QPushButton:hover {{
-                background-color: #3a8eef;
-            }}
-        """)
-        refresh_btn.clicked.connect(self._find_correlations)
-        header_layout.addWidget(refresh_btn)
-        
+
         layout.addLayout(header_layout)
         
         # Minimap
@@ -1104,32 +1101,8 @@ class CrossPCAPTimelineWidget(QFrame):
     
     def showEvent(self, event):
         super().showEvent(event)
-        if not self.overlay:
-            self._create_overlay()
-    
-    def _create_overlay(self):
-        # DISABLED: Correlation overlay causes performance issues
-        # The overlay draws lines between correlated events but lags with many correlations
-        return
-        
-        # Old code commented out:
-        # try:
-        #     if self.overlay:
-        #         self.overlay.deleteLater()
-        #     
-        #     self.overlay = CorrelationOverlay(self.scroll.viewport())
-        #     self.overlay.setGeometry(self.scroll.viewport().rect())
-        #     self.overlay.show()
-        #     self.overlay.raise_()
-        #     
-        #     if self.scroll.horizontalScrollBar():
-        #         self.scroll.horizontalScrollBar().valueChanged.connect(self._update_overlay)
-        #     if self.scroll.verticalScrollBar():
-        #         self.scroll.verticalScrollBar().valueChanged.connect(self._update_overlay)
-        #         
-        # except Exception as e:
-        #     print(f"Error creating overlay: {e}")
-    
+       
+
     def resizeEvent(self, event):
         super().resizeEvent(event)
         if self.overlay:
@@ -1215,7 +1188,7 @@ class CrossPCAPTimelineWidget(QFrame):
             t0 = time.time()
             
             self.all_correlations = []
-            # grouped_visible: (type, value) → {pcap_name: [events]}  — drives the table
+       
             self.grouped_visible = defaultdict(lambda: defaultdict(list))
 
             # Group ALL events by (type, value)
@@ -1226,6 +1199,15 @@ class CrossPCAPTimelineWidget(QFrame):
                     key = (event.event_type, event.value)
                     events_by_key[key].append(event)
                     pcaps_by_key[key].add(event.pcap_name)
+
+            # If there is only one PCAP, skip correlation filtering entirely
+            all_pcap_names = {t.pcap_name for t in self.pcap_timelines}
+            if len(all_pcap_names) < 2:
+                for timeline in self.pcap_timelines:
+                    timeline.set_visible_events(None)
+                self.correlation_count_label.setText("0 correlations (single source)")
+                self.perf_label.setText(f"Found in {time.time() - t0:.2f}s")
+                return
 
             # Determine visible set and build correlation pairs
             visible_events = set()
@@ -1271,11 +1253,34 @@ class CrossPCAPTimelineWidget(QFrame):
             print(f"Error finding correlations: {e}")
             import traceback; traceback.print_exc()
     
+    def _build_correlated_entries(self, match_type, match_value):
+
+        # Collect all occurrences of this value and attach sibling events
+        correlated_events = []
+
+        for timeline in self.pcap_timelines:
+            for e in timeline.events:
+                if e.event_type == match_type and e.value == match_value:
+
+                    # Find every other event from the same packet in this timeline
+                    siblings = [
+                        s for s in timeline.events
+                        if s.timestamp == e.timestamp and s is not e
+                    ]
+
+                    correlated_events.append({
+                        'event':    e,
+                        'filename': timeline.pcap_name,
+                        'siblings': siblings   # other fields from the same packet
+                    })
+
+        return correlated_events
+
     def highlight_group(self, event_type, value):
 
         # Highlight all events matching type and value across every timeline and scroll to first
         first_event = None
-        correlated_events = []
+        correlated_events = self._build_correlated_entries(event_type, value)
 
         for timeline in self.pcap_timelines:
             matching = [e for e in timeline.events
@@ -1284,8 +1289,6 @@ class CrossPCAPTimelineWidget(QFrame):
                 timeline.set_highlighted_events(matching)
                 if first_event is None:
                     first_event = matching[0]
-                for e in matching:
-                    correlated_events.append({'event': e, 'filename': timeline.pcap_name})
             else:
                 timeline.clear_highlights()
 
@@ -1297,9 +1300,9 @@ class CrossPCAPTimelineWidget(QFrame):
             self.info_panel.display_events(correlated_events, navigate_callback=self.navigate_to_event)
             self.info_panel.show()
             self.info_panel.raise_()
-            panel_width = 280
-            panel_height = min(350, self.height() - 80)
-            self.info_panel.setGeometry(self.width() - panel_width - 15, 70, panel_width, panel_height)
+            panel_width = 400
+            panel_height = 500
+            self.info_panel.setGeometry(self.width() - panel_width - 15, 10, panel_width, panel_height)
 
     def _scroll_to_event(self, event):
         scrollbar = self.scroll.horizontalScrollBar()
@@ -1313,9 +1316,8 @@ class CrossPCAPTimelineWidget(QFrame):
     def highlight_event(self, timestamp, event_type, value):
         
         # Highlight a specific event on the timeline based on timestamp, type, and value
-        print(f"\n=== Timeline highlight_event called ===")
-        print(f"Looking for: {event_type} - {value} at {timestamp}")
-        
+
+
         try:
             # Find the event that matches
             matching_events = []
@@ -1328,10 +1330,8 @@ class CrossPCAPTimelineWidget(QFrame):
                         time_diff = abs((event.timestamp - timestamp).total_seconds())
                         if time_diff < 1.0:  # Within 1 second tolerance
                             matching_events.append((event, timeline, time_diff))
-                            print(f"  Found match in {timeline.pcap_name}: time_diff={time_diff:.3f}s")
             
             if not matching_events:
-                print("  No matching events found!")
                 # Clear all highlights if no match
                 for timeline in self.pcap_timelines:
                     timeline.clear_highlights()
@@ -1340,8 +1340,6 @@ class CrossPCAPTimelineWidget(QFrame):
             # Sort by time difference and take the closest match
             matching_events.sort(key=lambda x: x[2])
             best_event, best_timeline, _ = matching_events[0]
-            
-            print(f"  Highlighting event in {best_timeline.pcap_name}")
             
             # Clear highlights on all timelines first
             for timeline in self.pcap_timelines:
@@ -1354,7 +1352,6 @@ class CrossPCAPTimelineWidget(QFrame):
             # Scroll to the best match
             self._scroll_to_event(best_event)
             
-            print("=== End highlight_event ===\n")
             
         except Exception as e:
             print(f"Error in highlight_event: {e}")
@@ -1375,22 +1372,9 @@ class CrossPCAPTimelineWidget(QFrame):
 
     def on_timeline_event_clicked(self, event, pcap_name):
 
-        # Show or refresh the info panel when a timeline node is clicked
-        print(f"\n=== Timeline Event Clicked ===")
-        print(f"Event: {event.value} ({event.event_type})")
-        print(f"PCAP: {pcap_name}")
-        
-        # Collect all events with the same type and value across every PCAP
-        correlated_events = []
-        for timeline in self.pcap_timelines:
-            for e in timeline.events:
-                if e.value == event.value and e.event_type == event.event_type:
-                    correlated_events.append({
-                        'event': e,
-                        'filename': timeline.pcap_name
-                    })
-        
-        print(f"Found {len(correlated_events)} correlated events")
+      
+        # Store the correlated events for the info panel to display when an event card is clicked
+        correlated_events = self._build_correlated_entries(event.event_type, event.value)
         
         if correlated_events:
             # Refresh the panel, display_events clears and repopulates automatically
@@ -1398,18 +1382,57 @@ class CrossPCAPTimelineWidget(QFrame):
             self.info_panel.show()
             self.info_panel.raise_()
             
-            panel_width = 280
-            panel_height = min(350, self.height() - 80)
-            self.info_panel.setGeometry(self.width() - panel_width - 15, 70, panel_width, panel_height)
+            panel_width = 400
+            panel_height = 500
+            self.info_panel.setGeometry(self.width() - panel_width - 15, 10, panel_width, panel_height)
             
             # Highlight all instances across every timeline
             for timeline in self.pcap_timelines:
                 matching = [e for e in timeline.events if e.value == event.value and e.event_type == event.event_type]
                 if matching:
                     timeline.set_highlighted_events(matching)
-        
-        print("=== End Event Click ===\n")
-    
+     
+    def _create_overlay(self):
+
+        # Create the correlation line overlay and attach it to the scroll viewport
+        try:
+            if self.overlay:
+                self.overlay.deleteLater()
+            self.overlay = CorrelationOverlay(self.scroll.viewport())
+            self.overlay.setGeometry(self.scroll.viewport().rect())
+            self.overlay.show()
+            self._update_overlay()
+        except Exception as e:
+            print(f"Error creating overlay: {e}")
+
+    def load_incognito_gaps(self, gap_data, gap_table_ref=None):
+
+        # Remove any existing gap lane before inserting a fresh one
+        if self._incognito_lane:
+            self._incognito_lane.deleteLater()
+            self._incognito_lane = None
+
+        if not gap_data or not self.start_time or not self.end_time:
+            return
+
+        # Build the lane using the same time range as the PCAP lanes
+        self._incognito_lane = IncognitoGapTimeline(
+            gap_data,
+            self.start_time,
+            self.end_time,
+            pixels_per_second=self.pixels_per_second
+        )
+
+        if gap_table_ref:
+            self._incognito_lane.set_gap_table(gap_table_ref)
+
+        # Insert directly above the timestamp axis so it sits with the other lanes
+        axis_index = self.timeline_layout.indexOf(self.timestamp_axis)
+        if axis_index >= 0:
+            self.timeline_layout.insertWidget(axis_index, self._incognito_lane)
+        else:
+            self.timeline_layout.addWidget(self._incognito_lane)
+            
     def clear_timeline(self):
         
         # Clear all highlights and events from the timeline
@@ -1423,6 +1446,8 @@ class CrossPCAPTimelineWidget(QFrame):
         if self.overlay:
             self.overlay.correlations = []
             self.overlay.update()
+
+    
 
     def load_timeline_data(self, timeline_data):
         try:
@@ -1475,10 +1500,11 @@ class CrossPCAPTimelineWidget(QFrame):
                 self.minimap.show()
                 QTimer.singleShot(100, self._update_minimap_position)
 
+
             if not self.overlay:
                 QTimer.singleShot(100, self._create_overlay)
 
-            QTimer.singleShot(150, self._find_correlations)
+            QTimer.singleShot(150, self._find_correlations) 
             
         except Exception as e:
             print(f"Error loading timeline data: {e}")
@@ -1636,31 +1662,34 @@ class TimelineInfoPanel(QFrame):
     
     def _create_event_card(self, event_data, number):
 
-        # Build a single clickable card showing the event details
-        event = event_data['event']
+        event    = event_data['event']
         filename = event_data['filename']
-        
+        siblings = event_data.get('siblings', [])
+
         card = ClickableEventCard(event_data, self._navigate_callback)
         card_layout = QVBoxLayout(card)
         card_layout.setSpacing(2)
         card_layout.setContentsMargins(4, 4, 4, 4)
-        
-        # Header row: number + focus hint
+
         header_row = QHBoxLayout()
         number_label = QLabel(f"#{number}")
         number_label.setStyleSheet(f"color: {THEME['accent']}; font-weight: bold; font-size: 9px;")
         header_row.addWidget(number_label)
         header_row.addStretch()
-        focus_hint = QLabel("→ focus")
+        focus_hint = QLabel("focus")
         focus_hint.setStyleSheet(f"color: {THEME['text_secondary']}; font-size: 8px;")
         header_row.addWidget(focus_hint)
         card_layout.addLayout(header_row)
-        
+
         self._add_detail(card_layout, "File:", filename)
-        self._add_detail(card_layout, "Type:", event.event_type.upper())
-        self._add_detail(card_layout, "Value:", event.value)
-        self._add_detail(card_layout, "Time:", event.timestamp.strftime('%H:%M:%S'))
-        
+        self._add_detail(card_layout, "Time:", event.timestamp.strftime('%H:%M:%S.%f')[:-3])
+        self._add_detail(card_layout, "Protocol:", event.protocol or "N/A")
+        self._add_detail(card_layout, event.event_type.upper() + ":", event.value)
+
+        # Show sibling fields from the same packet
+        for sibling in siblings:
+            self._add_detail(card_layout, sibling.event_type.upper() + ":", sibling.value)
+
         return card
     
     def _add_detail(self, layout, label, value):
@@ -1678,3 +1707,224 @@ class TimelineInfoPanel(QFrame):
             font-size: 9px;
         """)
         layout.addWidget(row)
+
+# Incognito gap lane showing incognito gaps
+class IncognitoGapTimeline(QWidget):
+
+    def __init__(self, gap_data, start_time, end_time, height=120, pixels_per_second=50):
+        super().__init__()
+        self.gap_data          = gap_data
+        self.start_time        = start_time
+        self.end_time          = end_time
+        self.timeline_height   = height
+        self.pixels_per_second = pixels_per_second
+        self.hovered_gap       = None
+        self.highlighted_domain = None
+        self._dot_positions    = []  
+        self._sessions         = []  
+        self._gap_table_ref    = None
+
+        self.setMinimumHeight(height)
+        self.setMaximumHeight(height)
+        self.setMouseTracking(True)
+
+        total_seconds  = (end_time - start_time).total_seconds()
+        required_width = int(total_seconds * pixels_per_second) + 200
+        self.setMinimumWidth(required_width)
+
+        self._compute_dot_positions()
+        self._compute_sessions()
+
+    def set_gap_table(self, table_ref):
+        # Wire up to IncognitoGapWidget so clicking a dot selects the matching table row
+        self._gap_table_ref = table_ref
+
+    def _compute_dot_positions(self):
+        # Calculate x position for each gap from its first_seen timestamp
+        self._dot_positions = []
+        timeline_y = self.timeline_height // 2
+
+        for gap in self.gap_data:
+            elapsed = (gap['first_seen'] - self.start_time).total_seconds()
+            x = 100 + int(elapsed * self.pixels_per_second)
+            self._dot_positions.append((x, timeline_y, gap))
+
+    def _compute_sessions(self):
+        # Group gaps within 5 minutes of each other into inferred session spans
+        SESSION_GAP_SECONDS = 300
+        self._sessions = []
+
+        if not self._dot_positions:
+            return
+
+        sorted_dots = sorted(self._dot_positions, key=lambda d: d[0])
+        session_x0  = sorted_dots[0][0]
+        session_x1  = sorted_dots[0][0]
+        scores      = [sorted_dots[0][2]['suspiciousness']]
+
+        for i in range(1, len(sorted_dots)):
+            x, y, gap   = sorted_dots[i]
+            prev_gap    = sorted_dots[i - 1][2]
+            gap_secs    = (gap['first_seen'] - prev_gap['first_seen']).total_seconds()
+
+            if gap_secs <= SESSION_GAP_SECONDS:
+                session_x1 = x
+                scores.append(gap['suspiciousness'])
+            else:
+                if session_x1 > session_x0:
+                    self._sessions.append((session_x0, session_x1, max(scores)))
+                session_x0 = x
+                session_x1 = x
+                scores     = [gap['suspiciousness']]
+
+        if session_x1 > session_x0:
+            self._sessions.append((session_x0, session_x1, max(scores)))
+
+    def _score_color(self, score):
+        # Map suspiciousness score to colour matching the gap table
+        if score >= 60:
+            return "#FF4444"
+        elif score >= 30:
+            return "#FFA500"
+        else:
+            return "#888888"
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+
+        painter.fillRect(self.rect(), QColor(THEME['timeline_bg']))
+
+        # Lane label, same position and style as PCAPTimeline
+        painter.setPen(QColor(THEME['text_primary']))
+        font = QFont()
+        font.setPointSize(10)
+        font.setBold(True)
+        painter.setFont(font)
+        painter.drawText(QRect(10, 10, 85, 20),
+                         Qt.AlignLeft | Qt.AlignVCenter, "Incognito")
+
+        timeline_y    = self.timeline_height // 2
+        viewport_rect = self.visibleRegion().boundingRect()
+
+        # Draw inferred session spans as semi-transparent bands behind the dots
+        for x_start, x_end, max_score in self._sessions:
+            span_col = QColor(self._score_color(max_score))
+            span_col.setAlpha(25)
+            painter.fillRect(x_start - 10, timeline_y - 18,
+                             (x_end - x_start) + 20, 36, span_col)
+
+            border_col = QColor(self._score_color(max_score))
+            border_col.setAlpha(70)
+            painter.setPen(QPen(border_col, 1, Qt.DashLine))
+            painter.drawRect(x_start - 10, timeline_y - 18,
+                             (x_end - x_start) + 20, 36)
+
+            # Label the span
+            font.setPointSize(7)
+            font.setBold(False)
+            font.setItalic(True)
+            painter.setFont(font)
+            painter.setPen(QColor(self._score_color(max_score)))
+            painter.drawText(x_start - 8, timeline_y - 22, "possible session")
+
+        # Timeline bar, identical to PCAPTimeline
+        painter.setPen(QPen(QColor(THEME['border']), 2))
+        painter.drawLine(100, timeline_y, self.width() - 20, timeline_y)
+
+        # Gap dots
+        for x, y, gap in self._dot_positions:
+            # Cull offscreen dots
+            if x < viewport_rect.left() - 50 or x > viewport_rect.right() + 50:
+                continue
+
+            color          = self._score_color(gap['suspiciousness'])
+            is_hovered     = gap == self.hovered_gap
+            is_highlighted = gap['domain'] == self.highlighted_domain
+
+            if is_highlighted:
+                painter.setBrush(QBrush(QColor("#ffdd00")))
+                painter.setPen(QPen(QColor("#ffdd00").darker(130), 2))
+                painter.drawEllipse(x - 7, y - 7, 14, 14)
+            elif is_hovered:
+                painter.setBrush(QBrush(QColor(color).lighter(140)))
+                painter.setPen(QPen(QColor(color).lighter(160), 2))
+                painter.drawEllipse(x - 6, y - 6, 12, 12)
+            else:
+                painter.setBrush(QBrush(QColor(color)))
+                painter.setPen(QPen(QColor(color).darker(120), 1))
+                painter.drawEllipse(x - 4, y - 4, 8, 8)
+
+        # Tooltip drawn last so it sits on top of everything
+        if self.hovered_gap:
+            self._draw_tooltip(painter, self.hovered_gap)
+
+    def _draw_tooltip(self, painter, gap):
+        # Draw tooltip showing domain, score, category and time
+        lines = [
+            gap['domain'],
+            f"Score: {gap['suspiciousness']}  |  {gap['category']}",
+            f"First seen: {gap['first_seen'].strftime('%H:%M:%S')}",
+            f"Occurrences: {gap['count']}"
+        ]
+
+        font = QFont()
+        font.setPointSize(9)
+        painter.setFont(font)
+        metrics   = painter.fontMetrics()
+        max_width = max(metrics.horizontalAdvance(l) for l in lines)
+        line_h    = metrics.height()
+        tip_w     = max_width + 20
+        tip_h     = line_h * len(lines) + 10
+
+        dot_x = next((x for x, y, g in self._dot_positions if g == gap), self.width() // 2)
+        tip_x = max(10, min(dot_x - tip_w // 2, self.width() - tip_w - 10))
+        tip_y = 5
+
+        painter.setBrush(QBrush(QColor(THEME['surface_elevated'])))
+        painter.setPen(QPen(QColor(self._score_color(gap['suspiciousness'])), 2))
+        painter.drawRoundedRect(tip_x, tip_y, tip_w, tip_h, 4, 4)
+
+        painter.setPen(QColor(THEME['text_primary']))
+        y_off = tip_y + line_h
+        for line in lines:
+            painter.drawText(QRect(tip_x + 10, y_off - line_h + 5, tip_w - 20, line_h),
+                            Qt.AlignLeft | Qt.AlignVCenter, line)
+            y_off += line_h
+
+    def mouseMoveEvent(self, event):
+        mx, my       = event.x(), event.y()
+        prev_hovered = self.hovered_gap
+        self.hovered_gap = None
+
+        for x, y, gap in self._dot_positions:
+            if abs(mx - x) <= 8 and abs(my - y) <= 8:
+                self.hovered_gap = gap
+                self.setCursor(Qt.PointingHandCursor)
+                break
+        else:
+            self.setCursor(Qt.ArrowCursor)
+
+        if self.hovered_gap != prev_hovered:
+            self.update()
+
+    def leaveEvent(self, event):
+        self.hovered_gap = None
+        self.setCursor(Qt.ArrowCursor)
+        self.update()
+
+    def mousePressEvent(self, event):
+        if event.button() != Qt.LeftButton or not self.hovered_gap:
+            return
+
+        # Select matching row in the gap table
+        if self._gap_table_ref and hasattr(self._gap_table_ref, 'gap_table'):
+            table = self._gap_table_ref.gap_table
+            for row in range(table.rowCount()):
+                item = table.item(row, 0)
+                if item and item.text() == self.hovered_gap['domain']:
+                    table.selectRow(row)
+                    table.scrollToItem(item)
+                    break
+
+        event.accept()

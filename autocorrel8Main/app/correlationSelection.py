@@ -79,7 +79,7 @@ class CorrelationSelectionTable(QFrame):
         self.field_names = [
             "Src IP",
             "Dst IP",
-            "Protocols",
+          
             "DNS Query",
             "HTTP Host",
             "TLS SNI"
@@ -155,7 +155,6 @@ class CorrelationSelectionTable(QFrame):
     def update_selection_states(self):
         self.srcIPSelected = False
         self.dstIPSelected = False
-        self.protocolsSelected = False
         self.dnsQuerySelected = False
         self.httpHostSelected = False
         self.tlsSNISelected = False

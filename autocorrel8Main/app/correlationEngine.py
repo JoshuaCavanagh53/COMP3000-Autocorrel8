@@ -32,6 +32,8 @@ class CorrelationEngine:
                         value = value,
                         pcap_name = pcap_name
                     )
+                    # Attach protocol for info panel
+                    event.protocol = packet.get('protocol')
                     events.append(event)
         return events
         
@@ -55,18 +57,12 @@ class CorrelationEngine:
     def _extract_field_value(self, packet, field_name):
 
         # Extract value from packet based on field name
-
         field_mapping = {
             'Src IP': ('ip', lambda p: p.get('src_ip')),
             'Dst IP': ('ip', lambda p: p.get('dst_ip')),
-            'TCP Src Port': ('port', lambda p: p.get('src_port')),
-            'TCP Dst Port': ('port', lambda p: p.get('dst_port')),
-            'UDP Src Port': ('port', lambda p: p.get('src_port')),
-            'UDP Dst Port': ('port', lambda p: p.get('dst_port')),
             'Protocols': ('protocol', lambda p: p.get('protocol')),
             'DNS Query': ('domain', lambda p: p.get('layers', {}).get('dns', {}).get('query')),
             'HTTP Host': ('domain', lambda p: p.get('layers', {}).get('http', {}).get('host')),
-            'TLS SNI': ('domain', lambda p: p.get('layers', {}).get('tls', {}).get('server_name')),
         }
 
         if field_name in field_mapping:

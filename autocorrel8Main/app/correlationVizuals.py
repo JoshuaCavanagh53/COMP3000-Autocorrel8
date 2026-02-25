@@ -186,7 +186,7 @@ class CorrelationTableWidget(QFrame):
         title_row.addWidget(self.mode_combo)
         layout.addLayout(title_row)
         
-        # Table — Value / Type / Count / Sources
+        # Table, Value / Type / Count / Sources
         self.table = QTableWidget()
         self.table.setColumnCount(4)
         self.table.setHorizontalHeaderLabels(["Value", "Type", "Count", "Sources"])
@@ -230,9 +230,9 @@ class CorrelationTableWidget(QFrame):
         
         # Internal state
         self.timeline_widget = None
-        self.current_rows = []       # rows currently displayed, for selection lookups
-        self.grouped_both = {}       # (type, value) → entry dict — appears in 2 or more PCAPs
-        self.grouped_multiple = {}   # (type, value) → entry dict — appears 2 or more times anywhere
+        self.current_rows = []       # Rows currently displayed, for selection lookups
+        self.grouped_both = {}       
+        self.grouped_multiple = {}   
         
         self.setLayout(layout)
     
@@ -564,3 +564,226 @@ class IncognitoGapWidget(QFrame):
             
             duration_item = QTableWidgetItem(duration_str)
             self.gap_table.setItem(row, 6, duration_item)
+
+# Incognito gap lane 
+class IncognitoGapTimeline(QWidget):
+
+    def __init__(self, gap_data, start_time, end_time, height=120, pixels_per_second=50):
+        super().__init__()
+        self.gap_data         = gap_data
+        self.start_time       = start_time
+        self.end_time         = end_time
+        self.timeline_height  = height
+        self.pixels_per_second = pixels_per_second
+        self.hovered_gap      = None
+        self.highlighted_domain = None
+        self._dot_positions   = []   # [(x, y, gap), ...]
+        self._sessions        = []   # [(x_start, x_end, max_score), ...]
+        self._gap_table_ref   = None
+
+        self.setMinimumHeight(height)
+        self.setMaximumHeight(height)
+        self.setMouseTracking(True)
+
+        total_seconds  = (end_time - start_time).total_seconds()
+        required_width = int(total_seconds * pixels_per_second) + 200
+        self.setMinimumWidth(required_width)
+
+        self._compute_dot_positions()
+        self._compute_sessions()
+
+    def set_gap_table(self, table_ref):
+        # Wire up to IncognitoGapWidget so clicking a dot selects the table row
+        self._gap_table_ref = table_ref
+
+    def _compute_dot_positions(self):
+        # Calculate x position for each gap from its first_seen timestamp
+        self._dot_positions = []
+        timeline_y = self.timeline_height // 2
+
+        for gap in self.gap_data:
+            elapsed = (gap['first_seen'] - self.start_time).total_seconds()
+            x = 100 + int(elapsed * self.pixels_per_second)
+            self._dot_positions.append((x, timeline_y, gap))
+
+    def _compute_sessions(self):
+        # Group gaps within 5 minutes of each other into inferred session spans
+        SESSION_GAP_SECONDS = 300
+        self._sessions = []
+
+        if not self._dot_positions:
+            return
+
+        sorted_dots  = sorted(self._dot_positions, key=lambda d: d[0])
+        session_x0   = sorted_dots[0][0]
+        session_x1   = sorted_dots[0][0]
+        session_t0   = sorted_dots[0][2]['first_seen']
+        scores       = [sorted_dots[0][2]['suspiciousness']]
+
+        for i in range(1, len(sorted_dots)):
+            x, y, gap  = sorted_dots[i]
+            prev_gap   = sorted_dots[i - 1][2]
+            gap_secs   = (gap['first_seen'] - prev_gap['first_seen']).total_seconds()
+
+            if gap_secs <= SESSION_GAP_SECONDS:
+                session_x1 = x
+                scores.append(gap['suspiciousness'])
+            else:
+                if session_x1 > session_x0:
+                    self._sessions.append((session_x0, session_x1, max(scores)))
+                session_x0 = x
+                session_x1 = x
+                scores     = [gap['suspiciousness']]
+
+        if session_x1 > session_x0:
+            self._sessions.append((session_x0, session_x1, max(scores)))
+
+    def _score_color(self, score):
+        # Map suspiciousness score to a colour matching the gap table colouring
+        if score >= 60:
+            return "#FF4444"
+        elif score >= 30:
+            return "#FFA500"
+        else:
+            return "#888888"
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+
+        painter.fillRect(self.rect(), QColor(THEME['timeline_bg']))
+
+        # Lane label — same position and style as PCAPTimeline
+        painter.setPen(QColor(THEME['text_primary']))
+        font = QFont()
+        font.setPointSize(10)
+        font.setBold(True)
+        painter.setFont(font)
+        painter.drawText(QRect(10, 10, 85, 20),
+                         Qt.AlignLeft | Qt.AlignVCenter, "Incognito")
+
+        timeline_y = self.timeline_height // 2
+
+        # Session span backgrounds
+        for x_start, x_end, max_score in self._sessions:
+            span_col = QColor(self._score_color(max_score))
+            span_col.setAlpha(25)
+            painter.fillRect(x_start - 10, timeline_y - 18,
+                             (x_end - x_start) + 20, 36, span_col)
+
+            border_col = QColor(self._score_color(max_score))
+            border_col.setAlpha(70)
+            painter.setPen(QPen(border_col, 1, Qt.DashLine))
+            painter.drawRect(x_start - 10, timeline_y - 18,
+                             (x_end - x_start) + 20, 36)
+
+            # Session label above the span
+            painter.setPen(QColor(self._score_color(max_score)))
+            font.setPointSize(7)
+            font.setBold(False)
+            font.setItalic(True)
+            painter.setFont(font)
+            painter.drawText(x_start - 8, timeline_y - 22, "possible session")
+
+        # Timeline bar — identical to PCAPTimeline
+        painter.setPen(QPen(QColor(THEME['border']), 2))
+        painter.drawLine(100, timeline_y, self.width() - 20, timeline_y)
+
+        viewport_rect = self.visibleRegion().boundingRect()
+
+        # Gap dots
+        for x, y, gap in self._dot_positions:
+            # Cull offscreen dots
+            if x < viewport_rect.left() - 50 or x > viewport_rect.right() + 50:
+                continue
+
+            color          = self._score_color(gap['suspiciousness'])
+            is_hovered     = gap == self.hovered_gap
+            is_highlighted = gap['domain'] == self.highlighted_domain
+
+            if is_highlighted:
+                painter.setBrush(QBrush(QColor("#ffdd00")))
+                painter.setPen(QPen(QColor("#ffdd00").darker(130), 2))
+                painter.drawEllipse(x - 7, y - 7, 14, 14)
+            elif is_hovered:
+                painter.setBrush(QBrush(QColor(color).lighter(140)))
+                painter.setPen(QPen(QColor(color).lighter(160), 2))
+                painter.drawEllipse(x - 6, y - 6, 12, 12)
+            else:
+                painter.setBrush(QBrush(QColor(color)))
+                painter.setPen(QPen(QColor(color).darker(120), 1))
+                painter.drawEllipse(x - 4, y - 4, 8, 8)
+
+        # Tooltip drawn last so it sits on top of everything
+        if self.hovered_gap:
+            self._draw_tooltip(painter, self.hovered_gap)
+
+    def _draw_tooltip(self, painter, gap):
+        # Draw tooltip showing domain, score, category and time
+        lines = [
+            gap['domain'],
+            f"Score: {gap['suspiciousness']}  |  {gap['category']}",
+            f"First seen: {gap['first_seen'].strftime('%H:%M:%S')}",
+            f"Occurrences: {gap['count']}"
+        ]
+
+        font = QFont()
+        font.setPointSize(9)
+        painter.setFont(font)
+        metrics    = painter.fontMetrics()
+        max_width  = max(metrics.horizontalAdvance(l) for l in lines)
+        line_h     = metrics.height()
+        tip_w      = max_width + 20
+        tip_h      = line_h * len(lines) + 10
+
+        dot_x = next((x for x, y, g in self._dot_positions if g == gap), self.width() // 2)
+        tip_x = max(10, min(dot_x - tip_w // 2, self.width() - tip_w - 10))
+        tip_y = 5
+
+        painter.setBrush(QBrush(QColor(THEME['surface_elevated'])))
+        painter.setPen(QPen(QColor(self._score_color(gap['suspiciousness'])), 2))
+        painter.drawRoundedRect(tip_x, tip_y, tip_w, tip_h, 4, 4)
+
+        painter.setPen(QColor(THEME['text_primary']))
+        y_off = tip_y + line_h
+        for line in lines:
+            painter.drawText(QRect(tip_x + 10, y_off - line_h + 5, tip_w - 20, line_h),
+                            Qt.AlignLeft | Qt.AlignVCenter, line)
+            y_off += line_h
+
+    def mouseMoveEvent(self, event):
+        mx, my       = event.x(), event.y()
+        prev_hovered = self.hovered_gap
+        self.hovered_gap = None
+
+        for x, y, gap in self._dot_positions:
+            if abs(mx - x) <= 8 and abs(my - y) <= 8:
+                self.hovered_gap = gap
+                self.setCursor(Qt.PointingHandCursor)
+                break
+        else:
+            self.setCursor(Qt.ArrowCursor)
+
+        if self.hovered_gap != prev_hovered:
+            self.update()
+
+    def leaveEvent(self, event):
+        self.hovered_gap = None
+        self.setCursor(Qt.ArrowCursor)
+        self.update()
+
+    def mousePressEvent(self, event):
+        if event.button() != Qt.LeftButton or not self.hovered_gap:
+            return
+
+        # Select matching row in the gap table
+        if self._gap_table_ref and hasattr(self._gap_table_ref, 'gap_table'):
+            table = self._gap_table_ref.gap_table
+            for row in range(table.rowCount()):
+                item = table.item(row, 0)
+                if item and item.text() == self.hovered_gap['domain']:
+                    table.selectRow(row)
+                    table.scrollToItem(item)
+                    break
+
+        event.accept()

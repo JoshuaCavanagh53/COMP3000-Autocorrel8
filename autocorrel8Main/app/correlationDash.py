@@ -15,6 +15,7 @@ import os
 import json
 from browserLogParser import BrowserLogParser
 from correlationEngine import GapDetector
+from timelineCorrelation import *
 
 
 
@@ -34,6 +35,7 @@ class CorrelationDashboard(QMainWindow):
         self.setGeometry(100, 100, 1920, 1080)
 
         self.showMaximized()  # Start maximized
+
         # Central widget
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
@@ -84,15 +86,15 @@ class CorrelationDashboard(QMainWindow):
         # Add left panel to top section
         top_section_layout.addWidget(left_panel)
         
-        # Right panel - Correlation View (switches between correlation table and distribution chart)
+        # Right panel, Correlation View (switches between correlation table and distribution chart)
         self.correlation_view = CorrelationVizuals()
         self.correlation_view.setMaximumHeight(450)  # Match left panel height
         top_section_layout.addWidget(self.correlation_view, 1)
 
-        # Add top section to content - no stretch factor so it stays compact
+        # Add top section to content, no stretch factor so it stays compact
         content_layout.addLayout(top_section_layout)
 
-        # Bottom section - Timeline (ALWAYS visible, just blanked out in distribution mode)
+        # Bottom section, Timeline 
         self.timeline_widget = CrossPCAPTimelineWidget()
         self.timeline_widget.setStyleSheet(f"""
             QFrame {{
@@ -100,12 +102,10 @@ class CorrelationDashboard(QMainWindow):
                 border-top: 1px solid {THEME['border']};
             }}
         """)
-        self.timeline_widget.setMinimumHeight(400)  # More room for timeline
-        
-        # Add timeline to content - this will expand to fill remaining space
-        content_layout.addWidget(self.timeline_widget, 1)
-        
-        # Connect button AFTER creating correlation_view
+        self.timeline_widget.setMinimumHeight(400)
+        content_layout.addWidget(self.timeline_widget, 1)  
+    
+        # Connect button after creating correlation_view
         self.correlation_selection_table.correlation_button.clicked.connect(self.attempt_correlation)
         
         # Pass timeline widget reference to correlation view for clearing/showing
@@ -174,10 +174,8 @@ class CorrelationDashboard(QMainWindow):
         return packets_by_file
     
     def detect_incognito_gaps(self):
-        
+    
         # Detect gaps between PCAP traffic and browser history
-        print("Starting incognito gap detection...\n")
-        
         # Get PCAP domain events 
         selected_fields = self.correlation_selection_table.get_selected_fields_by_file()
         packets_by_file = self.get_packets_for_selected_files(selected_fields.keys())
@@ -193,8 +191,6 @@ class CorrelationDashboard(QMainWindow):
             domain_events = [e for e in events if e.event_type == 'domain']
             pcap_domain_events.extend(domain_events)
         
-        print(f"Found {len(pcap_domain_events)} domain events in PCAPs")
-        
         # Get browser history events 
         browser_events = self.get_browser_history_events()
         
@@ -202,64 +198,33 @@ class CorrelationDashboard(QMainWindow):
             print("No browser history found! Upload a History.db file to evidence folder.\n")
             return
         
-        print(f"Found {len(browser_events)} browser history entries\n")
-        
         # Find and score gaps
         detector = GapDetector(time_window_seconds=60)
         grouped_gaps = detector.find_gaps_grouped(pcap_domain_events, browser_events)
-        
-        print(f"Analyzed {len(grouped_gaps)} unique domains\n")
         
         if not grouped_gaps:
             print("No gaps detected - all network traffic matches browser history\n")
             return
         
         # Separate by suspiciousness
-        high_suspicious = [g for g in grouped_gaps if g['suspiciousness'] >= 60]
+        high_suspicious   = [g for g in grouped_gaps if g['suspiciousness'] >= 60]
         medium_suspicious = [g for g in grouped_gaps if 30 <= g['suspiciousness'] < 60]
-        low_suspicious = [g for g in grouped_gaps if g['suspiciousness'] < 30]
+        low_suspicious    = [g for g in grouped_gaps if g['suspiciousness'] < 30]
         
-        # Display results
-        
-        # HIGH PRIORITY
-        if high_suspicious:
-            print("HIGH PRIORITY - Likely Incognito Browsing:")
-            print(f"{'Domain':<40} {'Score':<7} {'Count':<7} {'Category':<25} {'First Seen'}")
-            print("-" * 120)
-            for gap in high_suspicious:
-                print(f"{gap['domain']:<40} {gap['suspiciousness']:<7} {gap['count']:<7} {gap['category']:<25} {gap['first_seen'].strftime('%Y-%m-%d %H:%M:%S')}")
-            print()
-        
-        # MEDIUM PRIORITY
-        if medium_suspicious:
-            print("MEDIUM PRIORITY - Review Recommended:")
-            print(f"{'Domain':<40} {'Score':<7} {'Count':<7} {'Category':<25} {'First Seen'}")
-            print("-" * 120)
-            for gap in medium_suspicious[:20]:  # Show top 20
-                print(f"{gap['domain']:<40} {gap['suspiciousness']:<7} {gap['count']:<7} {gap['category']:<25} {gap['first_seen'].strftime('%Y-%m-%d %H:%M:%S')}")
-            if len(medium_suspicious) > 20:
-                print(f"... and {len(medium_suspicious) - 20} more")
-            print()
-        
-        # LOW PRIORITY (Collapsed)
-        if low_suspicious:
-            print(f"LOW PRIORITY - Background Services ({len(low_suspicious)} domains)")
-            print("   [Likely infrastructure/services]")
-            print("-" * 120)
-            for gap in low_suspicious[:5]:
-                print(f"   {gap['domain']:<40} (Score: {gap['suspiciousness']}, {gap['category']})")
-            if len(low_suspicious) > 5:
-                print(f"   ... and {len(low_suspicious) - 5} more background services")
-            print()
-        
-        # Summary
-        print("=" * 120)
-        print(f"Summary: {len(high_suspicious)} high priority | {len(medium_suspicious)} medium priority | {len(low_suspicious)} low priority")
-        print("=" * 120)
-        print()
-
         # Load gaps into timeline view
         self.correlation_view.incognito_gap_widget.load_gaps(grouped_gaps)
+
+        # Load the PCAP events into the timeline so there's something to compare against
+        self.timeline_widget.load_timeline_data(pcap_timeline)
+        
+        # Load gaps into the timeline as a dedicated lane
+        self.timeline_widget.load_incognito_gaps(
+            grouped_gaps,
+            self.correlation_view.incognito_gap_widget
+        )
+        
+      
+
 
 
     def get_browser_history_events(self):
@@ -288,6 +253,6 @@ class CorrelationDashboard(QMainWindow):
 # Start the application
 if __name__ == "__main__":
     app = QApplication(sys.argv)
-    window = CorrelationDashboard(path="C:\\Users\\jjc19\\OneDrive\\Documents\\Cases\\Case_1")
+    window = CorrelationDashboard(path="C:\\Users\\jjc19\\OneDrive\\Documents\\Cases\\Case_13")
     window.show()
     sys.exit(app.exec())
