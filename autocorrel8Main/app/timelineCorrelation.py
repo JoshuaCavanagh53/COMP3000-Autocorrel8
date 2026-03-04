@@ -313,6 +313,32 @@ class PCAPTimeline(QWidget):
 
         super().mousePressEvent(event)
 
+    def _compute_expanded_rect(self, cluster):
+        
+        # Return (box_x, box_y, box_w, box_h) for an expanded cluster without painting.
+        
+        DOT_R       = 5
+        COL_SPACING = 22
+        ROW_SPACING = 22
+        H_PAD       = 14
+        V_PAD_TOP   = 24
+        V_PAD_BOT   = 10
+        MAX_COLS    = 10
+
+        n    = cluster.count
+        cols = min(MAX_COLS, n)
+        rows = (n + cols - 1) // cols
+
+        content_w = (cols - 1) * COL_SPACING if cols > 1 else 0
+        content_h = (rows - 1) * ROW_SPACING if rows > 1 else 0
+        box_w = content_w + H_PAD * 2 + DOT_R * 2
+        box_h = content_h + V_PAD_TOP + V_PAD_BOT + DOT_R * 2
+
+        timeline_y = self.timeline_height // 2
+        box_x = max(105, cluster.x_center - box_w // 2)
+        box_y = timeline_y - box_h // 2
+        return (box_x, box_y, box_w, box_h)
+
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
@@ -334,48 +360,60 @@ class PCAPTimeline(QWidget):
         
         # Get visible region for culling
         viewport_rect = self.visibleRegion().boundingRect()
-        
-        # Draw clusters first
-        for cluster in self.clusters:
-            # Cull offscreen clusters
-            if cluster.x_end < viewport_rect.left() - 50 or cluster.x_start > viewport_rect.right() + 50:
-                continue
-            
-            is_hovered = cluster == self.hovered_cluster
-            self._draw_cluster(painter, cluster, timeline_y, is_hovered)
-        
-        # Draw individual events 
-        clustered_events = set()
-        expanded_cluster_events = set()
-        
+
+        # Pre-compute bounding rects for all expanded clusters so we can occlude
+        # anything that sits behind them before they are drawn.
+        expanded_rects = []
         for cluster in self.clusters:
             if cluster.expanded:
-                # Events in expanded clusters are drawn by _draw_expanded_cluster
+                rx, ry, rw, rh = self._compute_expanded_rect(cluster)
+                expanded_rects.append(QRect(rx, ry, rw, rh))
+
+        def behind_expanded(x):
+            
+            # Return True if pixel x falls inside any expanded cluster box.
+            return any(r.left() <= x <= r.right() for r in expanded_rects)
+
+        # Collapsed clusters 
+        for cluster in self.clusters:
+            if cluster.expanded:
+                continue
+            if cluster.x_end < viewport_rect.left() - 50 or cluster.x_start > viewport_rect.right() + 50:
+                continue
+            # Hide this collapsed bar if its centre sits inside an expanded cluster box
+            if behind_expanded(cluster.x_center):
+                continue
+            is_hovered = cluster == self.hovered_cluster
+            self._draw_cluster(painter, cluster, timeline_y, is_hovered)
+
+        # Individual events 
+        clustered_events = set()
+        expanded_cluster_events = set()
+
+        for cluster in self.clusters:
+            if cluster.expanded:
                 expanded_cluster_events.update(cluster.events)
             else:
-                # Events in collapsed clusters shouldn't be drawn individually
                 clustered_events.update(cluster.events)
-        
+
         for ev in self.events:
-            # Remove offscreen events
             if ev.x_pos < viewport_rect.left() - 50 or ev.x_pos > viewport_rect.right() + 50:
                 continue
-            
-            # Skip events hidden by the current visibility filter
             if self.visible_event_set is not None and ev not in self.visible_event_set:
                 continue
-            
-            # Skip events in expanded clusters 
+            # Events owned by an expanded cluster are drawn inside that cluster box
             if ev in expanded_cluster_events:
                 continue
-            
-            # Skip events that are in collapsed clusters unless highlighted
+            # Events in collapsed clusters are hidden unless highlighted
             if ev in clustered_events and ev not in self.highlighted_events:
                 continue
-            
+            # Hide lone events that sit behind an expanded cluster box
+            if behind_expanded(ev.x_pos):
+                continue
+
             is_highlighted = ev in self.highlighted_events
-            is_hovered = ev == self.hovered_event
-            
+            is_hovered     = ev == self.hovered_event
+
             if is_highlighted:
                 self._draw_highlighted_event(painter, ev, timeline_y)
             elif is_hovered:
@@ -385,7 +423,16 @@ class PCAPTimeline(QWidget):
                 painter.setBrush(QBrush(QColor(color)))
                 painter.setPen(QPen(QColor(color), 1))
                 painter.drawEllipse(ev.x_pos - 4, timeline_y - 4, 8, 8)
-        
+
+        # Expanded clusters drawn last so they paint over everything
+        for cluster in self.clusters:
+            if not cluster.expanded:
+                continue
+            if cluster.x_end < viewport_rect.left() - 50 or cluster.x_start > viewport_rect.right() + 50:
+                continue
+            is_hovered = cluster == self.hovered_cluster
+            self._draw_cluster(painter, cluster, timeline_y, is_hovered)
+
         # Draw tooltips last
         if self.hovered_event:
             self._draw_tooltip(painter, self.hovered_event)

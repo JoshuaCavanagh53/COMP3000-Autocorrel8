@@ -876,16 +876,15 @@ class FileUploadPopup(QFrame):
     # File type detection
     @staticmethod
     def routeFile(file_path):
-        
         ext = Path(file_path).suffix.lower()
 
-        if ext == ".pcap":
+        if ext in (".pcap", ".pcapng"):
             return "pcap"
         elif ext == ".evtx":
             return "windows_event_parser"
         elif ext == ".log":
             return "syslog_parser"
-        elif ext == ".sqlite":
+        elif ext in (".sqlite", ".db"):  
             return "browser_parser"
         else: 
             return "unsupported file type"

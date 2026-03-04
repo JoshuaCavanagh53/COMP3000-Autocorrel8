@@ -86,7 +86,13 @@ class SourceOverview(QFrame):
                 self.file_table.setItem(row, 1, QTableWidgetItem(source_type))  
                 self.file_table.setItem(row, 2, QTableWidgetItem(timestamp))
                 self.file_table.setItem(row, 3, QTableWidgetItem(str(file_size_mb)))
-                self.file_table.setItem(row, 4, QTableWidgetItem("Loading..."))  
+                
+                if ".pcap" in file_name or ".pcapng" in file_name:
+                    status = "Loading..."  # Will update when background thread finishes
+                else:
+                    status = "Loaded"     
+
+                self.file_table.setItem(row, 4, QTableWidgetItem(status))
 
         self.setLayout(layout)
 
@@ -147,8 +153,30 @@ class PacketLoaderThread(QThread):
     def __init__(self, file_path):
         super().__init__()
         self.file_path = file_path
-        self.tshark_path = "D:\\Wireshark\\tshark.exe"
-    
+        self.tshark_path = self._find_tshark()
+
+    def _find_tshark(self):
+        
+        # Check PATH first 
+        import shutil
+        tshark = shutil.which("tshark")
+        if tshark:
+            return tshark
+        
+        # Common Windows install locations
+        common_paths = [
+            r"C:\Program Files\Wireshark\tshark.exe",
+            r"C:\Program Files (x86)\Wireshark\tshark.exe",
+            r"D:\Wireshark\tshark.exe",
+            r"D:\Program Files\Wireshark\tshark.exe",
+        ]
+        for path in common_paths:
+            if os.path.exists(path):
+                return path
+        
+        raise FileNotFoundError(
+            "tshark.exe not found. Please install Wireshark or add it to your system PATH."
+        )
     def run(self):
         try:
             file_name = os.path.basename(self.file_path)
