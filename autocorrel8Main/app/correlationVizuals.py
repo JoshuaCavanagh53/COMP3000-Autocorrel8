@@ -143,6 +143,8 @@ class CorrelationTableWidget(QFrame):
         layout = QVBoxLayout()
         layout.setContentsMargins(5, 5, 5, 5)
         layout.setSpacing(5)
+
+        self._last_timeline_data = None 
         
         # Title row with mode filter combo
         title_row = QHBoxLayout()
@@ -237,6 +239,11 @@ class CorrelationTableWidget(QFrame):
         self.setLayout(layout)
     
     def load_data(self, timeline_data):
+        
+
+        if timeline_data is self._last_timeline_data:  # Same object, skip
+            return
+        self._last_timeline_data = timeline_data
 
         # Receive fresh timeline data, recompute groups, and refresh the table
         if not timeline_data:

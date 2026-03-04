@@ -1105,20 +1105,10 @@ class CrossPCAPTimelineWidget(QFrame):
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
-        if self.overlay:
-            try:
-                self.overlay.setGeometry(self.scroll.viewport().rect())
-                self._update_overlay()
-            except Exception as e:
-                print(f"Error in resizeEvent: {e}")
+
     
     def _update_overlay(self):
-        if self.overlay:
-            try:
-                self.overlay.setGeometry(self.scroll.viewport().rect())
-                self.overlay.set_data(self.correlations, self.pcap_timelines, self.scroll)
-            except Exception as e:
-                print(f"Error updating overlay: {e}")
+        pass
     
     def _on_zoom_changed(self, value):
         self.pixels_per_second = value
@@ -1457,6 +1447,7 @@ class CrossPCAPTimelineWidget(QFrame):
                     widget.deleteLater()
 
             self.pcap_timelines = []
+            self._incognito_lane = None # Clear any existing gap lane when loading new data
 
             all_events = []
             for events in timeline_data.values():
@@ -1499,10 +1490,6 @@ class CrossPCAPTimelineWidget(QFrame):
                 self.minimap.end_time = end_time
                 self.minimap.show()
                 QTimer.singleShot(100, self._update_minimap_position)
-
-
-            if not self.overlay:
-                QTimer.singleShot(100, self._create_overlay)
 
             QTimer.singleShot(150, self._find_correlations) 
             

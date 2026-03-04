@@ -18,7 +18,6 @@ import json
 import shutil
 from collections import Counter
 from themes import DARK_THEME, LIGHT_THEME
-from mongoDBConnection import DatabaseHelper, DatabaseUploadThread
 from correlationDash import CorrelationDashboard
 import copy
 from sharedWidgets import DataSources, ButtonLayout, TopNavBar
@@ -445,6 +444,7 @@ class DataOverview(QFrame):
                         with open(packets_file_path, "r", encoding="utf-8") as f:
                             packets = json.load(f)
                         self.packets_by_file[file_name] = packets
+                        self.fileLoadCompleted.emit(file_name) 
                         print(f"Loaded {len(packets)} packets from cache for {file_name}")
                     except Exception as e:
                         print(f"Error loading cached packets for {file_name}: {e}")
@@ -474,13 +474,6 @@ class DataOverview(QFrame):
         # Called when a file finishes loading
         print(f"File loaded: {file_name} with {len(packets)} packets")
         
-        # Start background DB upload
-        upload_thread = DatabaseUploadThread(packets, file_name) 
-        upload_thread.finished.connect(lambda fn: print(f"DB upload complete for {fn}"))
-        upload_thread.error.connect(lambda err: print(f"DB upload error: {err}"))
-        upload_thread.start() 
-        
-        self.upload_threads.append(upload_thread) # Prevents garbage collection
         # Remove from loading set
         self.loading_files.discard(file_name)
         
@@ -974,6 +967,10 @@ class OverviewDashBoard(QMainWindow):
         data_sources = DataSources(self.path)
         top_boxes_layout.addWidget(data_sources, alignment=Qt.AlignTop | Qt.AlignLeft)
         
+        # Create horizontal layout for SourceOverview and InvestigatorNotes
+        bottom_boxes_layout = QHBoxLayout()
+        bottom_boxes_layout.setSpacing(15)
+
         # Data overview box 
         data_overview = DataOverview()
         top_boxes_layout.addWidget(data_overview, alignment=Qt.AlignTop | Qt.AlignLeft)
@@ -981,32 +978,37 @@ class OverviewDashBoard(QMainWindow):
         # Load chart when file selected
         data_sources.fileSelected.connect(data_overview.display_chart_for_file)
 
-        # Add stretch to push everything to the left
-        top_boxes_layout.addStretch()
-        
-        # Add the horizontal layout to the main content layout
-        content_layout.addLayout(top_boxes_layout)
-        
-        # Create horizontal layout for SourceOverview and InvestigatorNotes
-        bottom_boxes_layout = QHBoxLayout()
-        bottom_boxes_layout.setSpacing(15)
-     
-        helperDB = DatabaseHelper()
-
-        helperDB.fetch_from_database()
-
         # Get list of evidence files in the case directory
         file_list = []
         for root, dirs, files in os.walk(f"{self.path}/evidence"):
             for file in files:
                 file_list.append(os.path.join(root, file))
 
-        # Preload Pcap files
-        data_overview.preload_all_pcap_files(file_list)
-
         # Data source overview (left)
         source_overview = SourceOverview(file_list)
         bottom_boxes_layout.addWidget(source_overview, alignment=Qt.AlignTop | Qt.AlignLeft)
+
+        # Update file status in DataSources when loading completes
+        data_overview.fileLoadCompleted.connect(
+            lambda file_name: source_overview.update_file_status(file_name, "Loaded")
+        )
+
+        data_overview.fileLoadStarted.connect(
+            lambda file_name: source_overview.update_file_status(file_name, "Loading...")
+        )
+        data_overview.fileLoadFailed.connect(
+            lambda file_name: source_overview.update_file_status(file_name, "Failed")
+        )
+
+        # Add stretch to push everything to the left
+        top_boxes_layout.addStretch()
+        
+        # Add the horizontal layout to the main content layout
+        content_layout.addLayout(top_boxes_layout)
+    
+        # Preload Pcap files
+        data_overview.preload_all_pcap_files(file_list)
+
 
         # Investigator notes (right)
         investigator_notes = InvestigatorNotes(self.path)

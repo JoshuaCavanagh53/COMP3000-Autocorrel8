@@ -91,6 +91,10 @@ class CorrelationDashboard(QMainWindow):
         self.correlation_view.setMaximumHeight(450)  # Match left panel height
         top_section_layout.addWidget(self.correlation_view, 1)
 
+
+        # Cache packets 
+        self._packet_cache = {}
+
         # Add top section to content, no stretch factor so it stays compact
         content_layout.addLayout(top_section_layout)
 
@@ -136,6 +140,15 @@ class CorrelationDashboard(QMainWindow):
 
     # Attempt correlation
     def attempt_correlation(self):
+        
+        # Clear stale caches when re-running
+        self._cached_browser_events = None
+        self._cached_gaps = None
+        if hasattr(self, '_cached_browser_events'):
+            del self._cached_browser_events
+        if hasattr(self, '_cached_gaps'):
+            del self._cached_gaps
+
         # Update the selection states
         self.correlation_selection_table.update_selection_states()
         
@@ -153,79 +166,77 @@ class CorrelationDashboard(QMainWindow):
         )
 
         # Update Visualization - both correlation view and timeline
+        self._last_timeline_data = timeline_data # Cache for later use in gap detection
         self.correlation_view.load_timeline_data(timeline_data)
         self.timeline_widget.load_timeline_data(timeline_data)
 
     def get_packets_for_selected_files(self, filenames):
-        # Get packet data from database or cache for selected files
+        
         packets_by_file = {}
-
         for filename in filenames:
-            # Try to load from cache first
+            if filename in self._packet_cache:
+                packets_by_file[filename] = self._packet_cache[filename]
+                continue
             cache_path = os.path.join("packetFiles", f"{filename}_packets.json")
-
             if os.path.exists(cache_path):
                 with open(cache_path, "r") as f:
-                    packets_by_file[filename] = json.load(f)
-            else:
-                # Get from database
-                pass
-        
+                    data = json.load(f)
+                self._packet_cache[filename] = data
+                packets_by_file[filename] = data
         return packets_by_file
     
     def detect_incognito_gaps(self):
-    
-        # Detect gaps between PCAP traffic and browser history
-        # Get PCAP domain events 
-        selected_fields = self.correlation_selection_table.get_selected_fields_by_file()
-        packets_by_file = self.get_packets_for_selected_files(selected_fields.keys())
+
+        # Use cached timeline if available, otherwise recompute
+        pcap_timeline = getattr(self, '_last_timeline_data', None)
         
-        pcap_timeline = self.correlation_engine.prepare_timeline_data(
-            packets_by_file,
-            selected_fields
-        )
-        
+        if not pcap_timeline:
+            selected_fields = self.correlation_selection_table.get_selected_fields_by_file()
+            packets_by_file = self.get_packets_for_selected_files(selected_fields.keys())
+            pcap_timeline = self.correlation_engine.prepare_timeline_data(
+                packets_by_file,
+                selected_fields
+            )
+
         # Extract domain events from PCAPs
         pcap_domain_events = []
         for filename, events in pcap_timeline.items():
             domain_events = [e for e in events if e.event_type == 'domain']
             pcap_domain_events.extend(domain_events)
-        
-        # Get browser history events 
-        browser_events = self.get_browser_history_events()
-        
+
+        # Use cached browser events if available
+        if not hasattr(self, '_cached_browser_events'):
+            self._cached_browser_events = self.get_browser_history_events()
+
+        browser_events = self._cached_browser_events
+
         if not browser_events:
             print("No browser history found! Upload a History.db file to evidence folder.\n")
             return
-        
-        # Find and score gaps
-        detector = GapDetector(time_window_seconds=60)
-        grouped_gaps = detector.find_gaps_grouped(pcap_domain_events, browser_events)
-        
+
+        # Use cached gaps if timeline and browser events haven't changed
+        if not hasattr(self, '_cached_gaps'):
+            detector = GapDetector(time_window_seconds=60)
+            self._cached_gaps = detector.find_gaps_grouped(pcap_domain_events, browser_events)
+
+        grouped_gaps = self._cached_gaps
+
         if not grouped_gaps:
             print("No gaps detected - all network traffic matches browser history\n")
             return
-        
-        # Separate by suspiciousness
-        high_suspicious   = [g for g in grouped_gaps if g['suspiciousness'] >= 60]
-        medium_suspicious = [g for g in grouped_gaps if 30 <= g['suspiciousness'] < 60]
-        low_suspicious    = [g for g in grouped_gaps if g['suspiciousness'] < 30]
-        
-        # Load gaps into timeline view
+
+        # Load gaps into correlation view
         self.correlation_view.incognito_gap_widget.load_gaps(grouped_gaps)
 
-        # Load the PCAP events into the timeline so there's something to compare against
+        # Load PCAP events into timeline
         self.timeline_widget.load_timeline_data(pcap_timeline)
-        
-        # Load gaps into the timeline as a dedicated lane
+
+        # Load gaps into timeline as dedicated lane
         self.timeline_widget.load_incognito_gaps(
             grouped_gaps,
             self.correlation_view.incognito_gap_widget
         )
         
-      
-
-
 
     def get_browser_history_events(self):
         
