@@ -1,104 +1,141 @@
-from PyQt5.QtWidgets import (
-    QApplication, QMainWindow, QWidget, QLabel, 
-    QPushButton, QVBoxLayout, QHBoxLayout, QFrame
-)
-from PyQt5.QtCore import Qt 
-
-from sharedWidgets import ButtonLayout, TopNavBar
-from correlationSelection import CorrelationSelectionTable
-from themes import DARK_THEME, LIGHT_THEME, THEME
-import sys
-from correlationVizuals import CorrelationVizuals
-from correlationEngine import CorrelationEngine
-from timelineCorrelation import CrossPCAPTimelineWidget
 import os
 import json
+from PyQt5.QtWidgets import (
+    QApplication, QMainWindow, QWidget, QLabel,
+    QPushButton, QVBoxLayout, QHBoxLayout, QFrame
+)
+from PyQt5.QtCore import Qt
+import sys
+
+from sharedWidgets import TopNavBar
+from correlationSelection import CorrelationSelectionTable
+from themes import THEME
+from incognitoWidget import IncognitoGapWidget
+from correlationEngine import CorrelationEngine, GapDetector
+from timelineCorrelation import CrossPCAPTimelineWidget
 from browserLogParser import BrowserLogParser
-from correlationEngine import GapDetector
-from timelineCorrelation import *
 
 
-
-# Dark mode by default
-CURRENT_THEME = 'dark'
-
-# Correlation Dashboard Main Window
 class CorrelationDashboard(QMainWindow):
-    def __init__(self, path):
+    def __init__(self, path: str):
         super().__init__()
-        
-        # Store the current case path
+
         self.path = path
-        
-        # Set window title and size
-        self.setWindowTitle("AutoCorrel8 Dashboard")
+
+        self.setWindowTitle("AutoCorrel8 – Incognito Analysis")
         self.setGeometry(100, 100, 1920, 1080)
+        self.showMaximized()
 
-        self.showMaximized()  # Start maximized
+        # Internal caches to avoid re-parsing data during iterative analysis
+        self._packet_cache          = {}
+        self._last_timeline_data    = None
+        self._cached_browser_events = None
+        self._cached_gaps           = None
 
-        # Central widget
-        central_widget = QWidget()
-        self.setCentralWidget(central_widget)
+        # Main layout
+        central = QWidget()
+        self.setCentralWidget(central)
 
-        # Main vertical layout
-        main_layout = QVBoxLayout(central_widget)
-        main_layout.setContentsMargins(0, 0, 0, 0)
-        main_layout.setSpacing(0)
+        root = QVBoxLayout(central)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
 
-        # Top navigation bar
-        nav_bar = TopNavBar()
-        nav_bar.setFixedHeight(50)
-        main_layout.addWidget(nav_bar)
+        # Nav bar
+        nav = TopNavBar()
+        nav.setFixedHeight(50)
+        root.addWidget(nav)
 
-        # Main content container
-        content_container = QWidget()
-        content_container.setStyleSheet(f"background-color: {THEME['background']};") 
-        content_layout = QVBoxLayout(content_container)
-        content_layout.setContentsMargins(0, 0, 0, 0)    
+        # Content area
+        content = QWidget()
+        content.setStyleSheet(f"background-color: {THEME['background']};")
+        content_layout = QVBoxLayout(content)
+        content_layout.setContentsMargins(0, 0, 0, 0)
         content_layout.setSpacing(0)
-        
-        # Top section - horizontal split for left panel and right panel
-        top_section_layout = QHBoxLayout()
-        top_section_layout.setSpacing(0)
-        top_section_layout.setContentsMargins(0, 0, 0, 0)
 
-        # Left panel - contains buttons and selection table
-        left_panel = QWidget()
-        left_panel.setMaximumHeight(450)  # Limit height so timeline has more room
-        left_panel_layout = QVBoxLayout(left_panel)
-        left_panel_layout.setContentsMargins(0, 0, 0, 0)
-        left_panel_layout.setSpacing(0)
+        # Top section with left panel and incognito widget
+        top_section = QHBoxLayout()
+        top_section.setSpacing(0)
+        top_section.setContentsMargins(0, 0, 0, 0)
 
-        # Navigation Buttons at the top
-        button_layout = ButtonLayout("Overview", "Correlation", "Add Source")
-        left_panel_layout.addWidget(button_layout)
+        # Left panel: tab buttons, correlation selection, run button
+        self.left_panel = QWidget()
+        self.left_panel.setMaximumWidth(480)
+        left_layout = QVBoxLayout(self.left_panel)
+        left_layout.setContentsMargins(10, 10, 10, 10)
+        left_layout.setSpacing(8)
 
-        # Set button state
-        button_layout.correlation_button.setChecked(True)
-        
-        # Import Correlation Engine
+        # Correlation engine
         self.correlation_engine = CorrelationEngine()
 
-        # Data source overview table 
+        # Selection table
         self.correlation_selection_table = CorrelationSelectionTable(self.path)
-        left_panel_layout.addWidget(self.correlation_selection_table)
-        
-        # Add left panel to top section
-        top_section_layout.addWidget(left_panel)
-        
-        # Right panel, Correlation View (switches between correlation table and distribution chart)
-        self.correlation_view = CorrelationVizuals()
-        self.correlation_view.setMaximumHeight(450)  # Match left panel height
-        top_section_layout.addWidget(self.correlation_view, 1)
+        left_layout.addWidget(self.correlation_selection_table)
 
+        # Attempt correlation button
+        self.run_button = QPushButton("🔍  Attempt Correlation")
+        self.run_button.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {THEME['accent']};
+                color: white;
+                border: none;
+                border-radius: 4px;
+                padding: 10px 16px;
+                font-size: 13px;
+                font-weight: bold;
+            }}
+            QPushButton:hover {{
+                background-color: {THEME['accent_hover']};
+            }}
+            QPushButton:pressed {{
+                background-color: {THEME['button_checked']};
+            }}
+        """)
+        self.run_button.clicked.connect(self.attempt_correlation)
+        left_layout.addWidget(self.run_button)
 
-        # Cache packets 
-        self._packet_cache = {}
+        top_section.addWidget(self.left_panel)
 
-        # Add top section to content, no stretch factor so it stays compact
-        content_layout.addLayout(top_section_layout)
+        # Incognito gaps widget
+        self.incognito_widget = IncognitoGapWidget()
+        self.incognito_widget.setMinimumWidth(550)
+        # Connect row-click, timeline highlight
+        self.incognito_widget.eventSelected.connect(self._on_incognito_event_selected)
+        top_section.addWidget(self.incognito_widget, 1)
 
-        # Bottom section, Timeline 
+        content_layout.addLayout(top_section)
+
+        # Toggle timeline button
+        toggle_bar = QWidget()
+        toggle_bar.setFixedHeight(36)
+        toggle_bar.setStyleSheet(f"background-color: {THEME['surface']}; border-top: 1px solid {THEME['border']};")
+        toggle_layout = QHBoxLayout(toggle_bar)
+        toggle_layout.setContentsMargins(12, 4, 12, 4)
+
+        tl_label = QLabel("Timeline")
+        tl_label.setStyleSheet(f"color: {THEME['text_secondary']}; font-size: 12px; font-weight: bold;")
+        toggle_layout.addWidget(tl_label)
+        toggle_layout.addStretch()
+
+        self._timeline_toggle_btn = QPushButton("▼  Hide")
+        self._timeline_toggle_btn.setFixedSize(90, 26)
+        self._timeline_toggle_btn.setCursor(Qt.PointingHandCursor)
+        self._timeline_toggle_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {THEME['button_bg']};
+                color: {THEME['text_primary']};
+                border: 1px solid {THEME['border']};
+                border-radius: 4px;
+                font-size: 11px;
+            }}
+            QPushButton:hover {{
+                background-color: {THEME['surface_elevated']};
+                border-color: {THEME['accent']};
+            }}
+        """)
+        self._timeline_toggle_btn.clicked.connect(self._toggle_timeline)
+        toggle_layout.addWidget(self._timeline_toggle_btn)
+        content_layout.addWidget(toggle_bar)
+
         self.timeline_widget = CrossPCAPTimelineWidget()
         self.timeline_widget.setStyleSheet(f"""
             QFrame {{
@@ -106,164 +143,125 @@ class CorrelationDashboard(QMainWindow):
                 border-top: 1px solid {THEME['border']};
             }}
         """)
-        self.timeline_widget.setMinimumHeight(400)
-        content_layout.addWidget(self.timeline_widget, 1)  
-    
-        # Connect button after creating correlation_view
-        self.correlation_selection_table.correlation_button.clicked.connect(self.attempt_correlation)
-        
-        # Pass timeline widget reference to correlation view for clearing/showing
-        self.correlation_view.set_timeline_widget(self.timeline_widget)
+        self.timeline_widget.setMinimumHeight(380)
+        content_layout.addWidget(self.timeline_widget, 1)
 
-        self.incognito_button = QPushButton("Detect Incognito Gaps")
-        
-        # Incognito gap widget
-        self.incognito_button.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {THEME['accent']};
-                color: white;
-                border: none;
-                border-radius: 4px;
-                padding: 10px;
-                font-size: 13px;
-                font-weight: bold;
-            }}
-            QPushButton:hover {{
-                background-color: {THEME['button_checked']};
-            }}
-        """)
-        self.incognito_button.clicked.connect(self.detect_incognito_gaps)  
-        left_panel_layout.addWidget(self.incognito_button)
+        root.addWidget(content)
 
-        # Add content container to main layout
-        main_layout.addWidget(content_container)
+    def _toggle_timeline(self):
+        # Hiding the timeline also collapses the selection panel so the gap
+        # table expands to full width; tab buttons stay visible via left_panel header
+        if self.timeline_widget.isVisible():
+            self.timeline_widget.hide()
+            self.left_panel.hide()
+            self._timeline_toggle_btn.setText("▲  Show")
+        else:
+            self.timeline_widget.show()
+            self.left_panel.show()
+            self._timeline_toggle_btn.setText("▼  Hide")
 
-    # Attempt correlation
+    def _on_incognito_event_selected(self, gap: dict):
+        # Called when the user clicks a row in the incognito gap table
+        self.timeline_widget.highlight_incognito_gap(gap)
+
     def attempt_correlation(self):
-        
-        # Clear stale caches when re-running
-        self._cached_browser_events = None
-        self._cached_gaps = None
-        if hasattr(self, '_cached_browser_events'):
-            del self._cached_browser_events
-        if hasattr(self, '_cached_gaps'):
-            del self._cached_gaps
+        # Run gap detection and populate both the table and timeline lanes
 
-        # Update the selection states
+        # Clear stale caches
+        self._cached_browser_events = None
+        self._cached_gaps           = None
+
+        # Update checkbox states
         self.correlation_selection_table.update_selection_states()
-        
-        # Get selected fields for debugging/processing
         selected_fields = self.correlation_selection_table.get_selected_fields_by_file()
         print("Selected fields by file:", selected_fields)
-        
-        # Get packet data from cache or database
-        packets_by_file = self.get_packets_for_selected_files(selected_fields.keys())
 
-        # Prepare timeline data using correlation engine
+        # Load packet data
+        packets_by_file = self._get_packets_for_files(selected_fields.keys())
+
+        # Build timeline events via correlation engine
         timeline_data = self.correlation_engine.prepare_timeline_data(
-            packets_by_file,
-            selected_fields
+            packets_by_file, selected_fields
         )
+        self._last_timeline_data = timeline_data
 
-        # Update Visualization - both correlation view and timeline
-        self._last_timeline_data = timeline_data # Cache for later use in gap detection
-        self.correlation_view.load_timeline_data(timeline_data)
+        # Load PCAP lanes into timeline
         self.timeline_widget.load_timeline_data(timeline_data)
 
-    def get_packets_for_selected_files(self, filenames):
-        
+        # Extract domain events for gap detection
+        pcap_domain_events = [
+            e for events in timeline_data.values()
+            for e in events if e.event_type == 'domain'
+        ]
+
+        # Parse browser history
+        browser_events = self._get_browser_history()
+
+        if not browser_events:
+            print("No browser history found — upload a History.db file to the evidence folder.")
+            return
+
+        # Find gaps between pcap domains and browser history
+        detector     = GapDetector(time_window_seconds=60)
+        grouped_gaps = detector.find_gaps_grouped(pcap_domain_events, browser_events)
+
+        if not grouped_gaps:
+            print("No incognito gaps detected — all traffic matches browser history.")
+            return
+
+        self._cached_gaps = grouped_gaps
+
+        # Populate incognito table
+        self.incognito_widget.load_gaps(grouped_gaps)
+
+        # Add incognito gap lane underneath the PCAP lanes
+        self.timeline_widget.load_incognito_gaps(
+            grouped_gaps,
+            gap_table_ref=self.incognito_widget
+        )
+
+        # Make timeline visible if hidden
+        if not self.timeline_widget.isVisible():
+            self._toggle_timeline()
+
+    def _get_packets_for_files(self, filenames) -> dict:
         packets_by_file = {}
-        for filename in filenames:
-            if filename in self._packet_cache:
-                packets_by_file[filename] = self._packet_cache[filename]
+        for fn in filenames:
+            if fn in self._packet_cache:
+                packets_by_file[fn] = self._packet_cache[fn]
                 continue
-            cache_path = os.path.join("packetFiles", f"{filename}_packets.json")
+            cache_path = os.path.join("packetFiles", f"{fn}_packets.json")
             if os.path.exists(cache_path):
                 with open(cache_path, "r") as f:
                     data = json.load(f)
-                self._packet_cache[filename] = data
-                packets_by_file[filename] = data
+                self._packet_cache[fn] = data
+                packets_by_file[fn]    = data
         return packets_by_file
-    
-    def detect_incognito_gaps(self):
 
-        # Use cached timeline if available, otherwise recompute
-        pcap_timeline = getattr(self, '_last_timeline_data', None)
-        
-        if not pcap_timeline:
-            selected_fields = self.correlation_selection_table.get_selected_fields_by_file()
-            packets_by_file = self.get_packets_for_selected_files(selected_fields.keys())
-            pcap_timeline = self.correlation_engine.prepare_timeline_data(
-                packets_by_file,
-                selected_fields
-            )
+    def _get_browser_history(self):
+        if self._cached_browser_events is not None:
+            return self._cached_browser_events
 
-        # Extract domain events from PCAPs
-        pcap_domain_events = []
-        for filename, events in pcap_timeline.items():
-            domain_events = [e for e in events if e.event_type == 'domain']
-            pcap_domain_events.extend(domain_events)
-
-        # Use cached browser events if available
-        if not hasattr(self, '_cached_browser_events'):
-            self._cached_browser_events = self.get_browser_history_events()
-
-        browser_events = self._cached_browser_events
-
-        if not browser_events:
-            print("No browser history found! Upload a History.db file to evidence folder.\n")
-            return
-
-        # Use cached gaps if timeline and browser events haven't changed
-        if not hasattr(self, '_cached_gaps'):
-            detector = GapDetector(time_window_seconds=60)
-            self._cached_gaps = detector.find_gaps_grouped(pcap_domain_events, browser_events)
-
-        grouped_gaps = self._cached_gaps
-
-        if not grouped_gaps:
-            print("No gaps detected - all network traffic matches browser history\n")
-            return
-
-        # Load gaps into correlation view
-        self.correlation_view.incognito_gap_widget.load_gaps(grouped_gaps)
-
-        # Load PCAP events into timeline
-        self.timeline_widget.load_timeline_data(pcap_timeline)
-
-        # Load gaps into timeline as dedicated lane
-        self.timeline_widget.load_incognito_gaps(
-            grouped_gaps,
-            self.correlation_view.incognito_gap_widget
-        )
-        
-
-    def get_browser_history_events(self):
-        
-        # Load and parse browser history from evidence folder
-        
-        evidence_dir = os.path.join(self.path, "evidence")
+        evidence_dir   = os.path.join(self.path, "evidence")
         browser_events = []
-        
-        # Look for browser history files
+
         for filename in os.listdir(evidence_dir):
             if filename.endswith(('.sqlite', '.db')) and 'history' in filename.lower():
-                
                 history_path = os.path.join(evidence_dir, filename)
-                print(f"Found browser history: {filename}")
-                
-                # Parse it
+                print(f"Parsing browser history: {filename}")
                 parser = BrowserLogParser()
                 events = parser.parse_browser_history('chrome', history_path)
                 browser_events.extend(events)
-                
-                print(f"✓ Parsed {len(events)} entries from {filename}")
-        
+                print(f"  → {len(events)} entries from {filename}")
+
+        self._cached_browser_events = browser_events
         return browser_events
 
-# Start the application
+
 if __name__ == "__main__":
-    app = QApplication(sys.argv)
-    window = CorrelationDashboard(path="C:\\Users\\jjc19\\OneDrive\\Documents\\Cases\\Case_13")
+    app    = QApplication(sys.argv)
+    window = CorrelationDashboard(
+        path=r"C:\Users\jjc19\OneDrive\Documents\Cases\Case_13"
+    )
     window.show()
     sys.exit(app.exec())
