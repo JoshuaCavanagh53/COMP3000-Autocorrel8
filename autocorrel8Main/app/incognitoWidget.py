@@ -9,6 +9,8 @@ from PyQt5.QtGui import QColor
 
 from themes import THEME
 
+from database import toggle_bookmark as db_toggle_bookmark, get_bookmarked_gaps as db_get_bookmarked_gaps, get_bookmarks_for_case
+
 
 class _TabBar(QWidget):
     tabChanged = pyqtSignal(int)  # emits 0 = All, 1 = Bookmarked
@@ -80,6 +82,9 @@ class IncognitoGapWidget(QFrame):
         self._all_gaps: list[dict] = []
         self._bookmarks: set[str]  = set()   # bookmarked domain strings
 
+        # Set after case is loaded
+        self.case_id = None
+
         self.setStyleSheet(f"""
             QFrame {{
                 background-color: {THEME['surface_elevated']};
@@ -146,14 +151,16 @@ class IncognitoGapWidget(QFrame):
             }}
         """)
 
-        self._table.setColumnWidth(self._COL_DOMAIN, 220)
+        self._table.setColumnWidth(self._COL_DOMAIN, 300)
         self._table.setColumnWidth(self._COL_COUNT,   55)
-        self._table.setColumnWidth(self._COL_CAT,    140)
-        self._table.setColumnWidth(self._COL_FIRST,  140)
-        self._table.setColumnWidth(self._COL_LAST,   140)
+        self._table.setColumnWidth(self._COL_CAT,    200)
+        self._table.setColumnWidth(self._COL_FIRST,  250)
+        self._table.setColumnWidth(self._COL_LAST,   250)
         self._table.setColumnWidth(self._COL_DUR,     70)
         self._table.setColumnWidth(self._COL_BM,      35)
         self._table.horizontalHeader().setStretchLastSection(False)
+
+       
 
         self._table.itemSelectionChanged.connect(self._on_row_selected)
         root.addWidget(self._table)
@@ -164,6 +171,12 @@ class IncognitoGapWidget(QFrame):
         self._all_gaps = gap_data or []
         self._apply_tab(self._tabs._group.checkedId())
         self._count_label.setText(f"{len(self._all_gaps)} gap{'s' if len(self._all_gaps) != 1 else ''}")
+
+    def set_case_id(self, case_id: int):
+        # Called once when the dashboard opens - restores bookmarks for this case
+        self.case_id = case_id
+        self._bookmarks = get_bookmarks_for_case(case_id)
+        self._apply_tab(self._tabs._group.checkedId())
 
     def get_bookmarked_gaps(self) -> list[dict]:
         return [g for g in self._all_gaps if g['domain'] in self._bookmarks]
@@ -201,18 +214,13 @@ class IncognitoGapWidget(QFrame):
             # Count 
             count_item = QTableWidgetItem(str(gap['count']))
             count_item.setTextAlignment(Qt.AlignCenter | Qt.AlignVCenter)
-            if gap['count'] >= 50:
-                count_item.setForeground(QColor("#FF4444"))
-            elif gap['count'] >= 15:
-                count_item.setForeground(QColor("#FFA500"))
-            else:
-                count_item.setForeground(QColor(THEME['accent']))
             self._table.setItem(row, self._COL_COUNT, count_item)
 
             # Category
             self._table.setItem(row, self._COL_CAT, QTableWidgetItem(gap['category']))
 
             # First / Last Seen
+
             self._table.setItem(row, self._COL_FIRST,
                 QTableWidgetItem(gap['first_seen'].strftime('%Y-%m-%d %H:%M:%S')))
             self._table.setItem(row, self._COL_LAST,
@@ -224,6 +232,7 @@ class IncognitoGapWidget(QFrame):
 
             # Bookmark toggle button
             bm_btn = QPushButton("★" if is_bookmarked else "☆")
+            bm_btn.setToolTip("Remove bookmark" if is_bookmarked else "Bookmark this domain")
             bm_btn.setFixedSize(28, 24)
             bm_btn.setCursor(Qt.PointingHandCursor)
             bm_btn.setProperty("domain", gap['domain'])
@@ -250,9 +259,12 @@ class IncognitoGapWidget(QFrame):
     def _toggle_bookmark(self, domain: str):
         if domain in self._bookmarks:
             self._bookmarks.discard(domain)
+            bookmarked = False
         else:
             self._bookmarks.add(domain)
-        # Refresh current tab
+            bookmarked = True
+        if self.case_id is not None:
+            db_toggle_bookmark(self.case_id, domain, bookmarked)
         self._apply_tab(self._tabs._group.checkedId())
 
     def _on_row_selected(self):

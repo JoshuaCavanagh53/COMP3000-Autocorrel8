@@ -14,6 +14,7 @@ from incognitoWidget import IncognitoGapWidget
 from correlationEngine import CorrelationEngine, GapDetector
 from timelineCorrelation import CrossPCAPTimelineWidget
 from browserLogParser import BrowserLogParser
+from database import init_db, create_case, get_packets, save_run, save_packets
 
 
 class CorrelationDashboard(QMainWindow):
@@ -22,9 +23,16 @@ class CorrelationDashboard(QMainWindow):
 
         self.path = path
 
-        self.setWindowTitle("AutoCorrel8 – Incognito Analysis")
+        self.setWindowTitle("AutoCorrel8 - Incognito Analysis")
         self.setGeometry(100, 100, 1920, 1080)
         self.showMaximized()
+
+        # Call database init
+        init_db()
+        self.case_id = create_case(os.path.basename(path), path)
+        self.current_run_id = None
+        print(f"Case ID: {self.case_id}")
+
 
         # Internal caches to avoid re-parsing data during iterative analysis
         self._packet_cache          = {}
@@ -198,7 +206,7 @@ class CorrelationDashboard(QMainWindow):
         browser_events = self._get_browser_history()
 
         if not browser_events:
-            print("No browser history found — upload a History.db file to the evidence folder.")
+            print("No browser history found - upload a History.db file to the evidence folder.")
             return
 
         # Find gaps between pcap domains and browser history
@@ -206,13 +214,20 @@ class CorrelationDashboard(QMainWindow):
         grouped_gaps = detector.find_gaps_grouped(pcap_domain_events, browser_events)
 
         if not grouped_gaps:
-            print("No incognito gaps detected — all traffic matches browser history.")
+            print("No incognito gaps detected - all traffic matches browser history.")
             return
 
         self._cached_gaps = grouped_gaps
 
+        # Save run and gaps to DB
+        pcap_files = list(selected_fields.keys())
+        self.current_run_id = save_run(self.case_id, pcap_files, grouped_gaps)
+        print(f"Run saved with ID: {self.current_run_id}")
+     
+
         # Populate incognito table
         self.incognito_widget.load_gaps(grouped_gaps)
+        self.incognito_widget.set_case_id(self.case_id)
 
         # Add incognito gap lane underneath the PCAP lanes
         self.timeline_widget.load_incognito_gaps(
@@ -227,16 +242,34 @@ class CorrelationDashboard(QMainWindow):
     def _get_packets_for_files(self, filenames) -> dict:
         packets_by_file = {}
         for fn in filenames:
+
+            # Mutliple fallbacks for packet data
+            # Session memory cache
             if fn in self._packet_cache:
                 packets_by_file[fn] = self._packet_cache[fn]
                 continue
-            cache_path = os.path.join("packetFiles", f"{fn}_packets.json")
-            if os.path.exists(cache_path):
-                with open(cache_path, "r") as f:
-                    data = json.load(f)
+
+            # Database
+            data = get_packets(self.case_id, fn)
+            print(f"DB returned {len(data)} packets for {fn}")
+
+            # Fallback, read old JSON file and migrate it into the DB
+            if not data:
+                json_path = os.path.join("packetFiles", f"{fn}_packets.json")
+                if os.path.exists(json_path):
+                    with open(json_path, "r") as f:
+                        data = json.load(f)
+                    print(f"Migrating {fn} from JSON into database...")
+                    save_packets(self.case_id, fn, data)
+
+            if data:
                 self._packet_cache[fn] = data
                 packets_by_file[fn]    = data
+            else:
+                print(f"Warning: no packet data found for {fn}")
+
         return packets_by_file
+
 
     def _get_browser_history(self):
         if self._cached_browser_events is not None:

@@ -482,7 +482,6 @@ class IncognitoGapWidget(QFrame):
         
         # Column widths
         self.gap_table.setColumnWidth(0, 220)  # Domain
-        self.gap_table.setColumnWidth(1, 50)   # Score
         self.gap_table.setColumnWidth(2, 50)   # Count
         self.gap_table.setColumnWidth(3, 140)  # Category
         self.gap_table.setColumnWidth(4, 140)  # First Seen
@@ -518,12 +517,7 @@ class IncognitoGapWidget(QFrame):
             score = gap['suspiciousness']
             score_item = QTableWidgetItem(str(score))
             
-            if score >= 60:
-                score_item.setForeground(QColor("#FF4444"))
-            elif score >= 30:
-                score_item.setForeground(QColor("#FFA500"))
-            else:
-                score_item.setForeground(QColor("#888888"))
+   
             
             self.gap_table.setItem(row, 1, score_item)
             

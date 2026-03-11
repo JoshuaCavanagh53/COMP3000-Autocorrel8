@@ -48,28 +48,6 @@ class CorrelationSelectionTable(QFrame):
         self.field_table = self.create_table()
         layout.addWidget(self.field_table)
 
-        self.correlation_button = QPushButton("Attempt Correlation")
-        self.correlation_button.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {THEME['button_bg']};
-                color: {THEME['text_primary']};
-                border: 1px solid {THEME['border']};
-                border-radius: 4px;
-                padding: 8px 12px;
-                font-size: 13px;
-                font-weight: 500;
-            }}
-            QPushButton:hover {{
-                background-color: {THEME['surface_elevated']};
-                border: 1px solid {THEME['accent']};
-            }}
-            QPushButton:pressed {{
-                background-color: {THEME['button_checked']}
-            }}
-        """)
-        self.correlation_button.clicked.connect(self.update_selection_states)
-        layout.addWidget(self.correlation_button)
-
         self.setLayout(layout)
 
     def create_table(self):
