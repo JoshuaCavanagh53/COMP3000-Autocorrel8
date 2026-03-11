@@ -1,5 +1,4 @@
 import os
-import json
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QLabel,
     QPushButton, QVBoxLayout, QHBoxLayout, QFrame
@@ -14,7 +13,7 @@ from incognitoWidget import IncognitoGapWidget
 from correlationEngine import CorrelationEngine, GapDetector
 from timelineCorrelation import CrossPCAPTimelineWidget
 from browserLogParser import BrowserLogParser
-from database import init_db, create_case, get_packets, save_run, save_packets
+from database import init_db, create_case, get_packets, save_packets, save_run
 
 
 class CorrelationDashboard(QMainWindow):
@@ -23,22 +22,20 @@ class CorrelationDashboard(QMainWindow):
 
         self.path = path
 
-        self.setWindowTitle("AutoCorrel8 - Incognito Analysis")
-        self.setGeometry(100, 100, 1920, 1080)
-        self.showMaximized()
-
-        # Call database init
+        # Init DB and register/retrieve this case
         init_db()
         self.case_id = create_case(os.path.basename(path), path)
         self.current_run_id = None
-        print(f"Case ID: {self.case_id}")
 
+        self.setWindowTitle("AutoCorrel8 – Incognito Analysis")
+        self.setGeometry(100, 100, 1920, 1080)
+        self.showMaximized()
 
         # Internal caches to avoid re-parsing data during iterative analysis
-        self._packet_cache          = {}
-        self._last_timeline_data    = None
+        self._packet_cache = {}
+        self._last_timeline_data = None
         self._cached_browser_events = None
-        self._cached_gaps           = None
+        self._cached_gaps = None
 
         # Main layout
         central = QWidget()
@@ -106,7 +103,7 @@ class CorrelationDashboard(QMainWindow):
         # Incognito gaps widget
         self.incognito_widget = IncognitoGapWidget()
         self.incognito_widget.setMinimumWidth(550)
-        # Connect row-click, timeline highlight
+        self.incognito_widget.set_case_id(self.case_id)
         self.incognito_widget.eventSelected.connect(self._on_incognito_event_selected)
         top_section.addWidget(self.incognito_widget, 1)
 
@@ -169,15 +166,15 @@ class CorrelationDashboard(QMainWindow):
             self._timeline_toggle_btn.setText("▼  Hide")
 
     def _on_incognito_event_selected(self, gap: dict):
-        # Called when the user clicks a row in the incognito gap table
-        self.timeline_widget.highlight_incognito_gap(gap)
+        # Focus the timeline on the selected gap's time window
+        self.timeline_widget.focus_on_gap(gap)
 
     def attempt_correlation(self):
         # Run gap detection and populate both the table and timeline lanes
 
         # Clear stale caches
         self._cached_browser_events = None
-        self._cached_gaps           = None
+        self._cached_gaps = None
 
         # Update checkbox states
         self.correlation_selection_table.update_selection_states()
@@ -206,15 +203,15 @@ class CorrelationDashboard(QMainWindow):
         browser_events = self._get_browser_history()
 
         if not browser_events:
-            print("No browser history found - upload a History.db file to the evidence folder.")
+            print("No browser history found — upload a History.db file to the evidence folder.")
             return
 
         # Find gaps between pcap domains and browser history
-        detector     = GapDetector(time_window_seconds=60)
+        detector = GapDetector(time_window_seconds=60)
         grouped_gaps = detector.find_gaps_grouped(pcap_domain_events, browser_events)
 
         if not grouped_gaps:
-            print("No incognito gaps detected - all traffic matches browser history.")
+            print("No incognito gaps detected — all traffic matches browser history.")
             return
 
         self._cached_gaps = grouped_gaps
@@ -222,12 +219,9 @@ class CorrelationDashboard(QMainWindow):
         # Save run and gaps to DB
         pcap_files = list(selected_fields.keys())
         self.current_run_id = save_run(self.case_id, pcap_files, grouped_gaps)
-        print(f"Run saved with ID: {self.current_run_id}")
-     
 
-        # Populate incognito table
+        # Populate incognito table — bookmarks restore automatically via case_id
         self.incognito_widget.load_gaps(grouped_gaps)
-        self.incognito_widget.set_case_id(self.case_id)
 
         # Add incognito gap lane underneath the PCAP lanes
         self.timeline_widget.load_incognito_gaps(
@@ -242,19 +236,17 @@ class CorrelationDashboard(QMainWindow):
     def _get_packets_for_files(self, filenames) -> dict:
         packets_by_file = {}
         for fn in filenames:
-
-            # Mutliple fallbacks for packet data
-            # Session memory cache
+            # 1. Session memory cache
             if fn in self._packet_cache:
                 packets_by_file[fn] = self._packet_cache[fn]
                 continue
 
-            # Database
+            # 2. Database
             data = get_packets(self.case_id, fn)
-            print(f"DB returned {len(data)} packets for {fn}")
 
-            # Fallback, read old JSON file and migrate it into the DB
+            # 3. Fallback - read old JSON file and migrate it into the DB
             if not data:
+                import json
                 json_path = os.path.join("packetFiles", f"{fn}_packets.json")
                 if os.path.exists(json_path):
                     with open(json_path, "r") as f:
@@ -264,18 +256,17 @@ class CorrelationDashboard(QMainWindow):
 
             if data:
                 self._packet_cache[fn] = data
-                packets_by_file[fn]    = data
+                packets_by_file[fn] = data
             else:
                 print(f"Warning: no packet data found for {fn}")
 
         return packets_by_file
 
-
     def _get_browser_history(self):
         if self._cached_browser_events is not None:
             return self._cached_browser_events
 
-        evidence_dir   = os.path.join(self.path, "evidence")
+        evidence_dir = os.path.join(self.path, "evidence")
         browser_events = []
 
         for filename in os.listdir(evidence_dir):
@@ -292,7 +283,7 @@ class CorrelationDashboard(QMainWindow):
 
 
 if __name__ == "__main__":
-    app    = QApplication(sys.argv)
+    app = QApplication(sys.argv)
     window = CorrelationDashboard(
         path=r"C:\Users\jjc19\OneDrive\Documents\Cases\Case_13"
     )
