@@ -17,15 +17,10 @@ import subprocess
 import json
 import shutil
 from collections import Counter
-from themes import DARK_THEME, LIGHT_THEME
+from themes import THEME
 from correlationDash import CorrelationDashboard
 import copy
 from sharedWidgets import DataSources, ButtonLayout, TopNavBar
-
-# Dark mode by default
-CURRENT_THEME = 'dark'
-THEME = DARK_THEME if CURRENT_THEME == 'dark' else LIGHT_THEME
-
 
 class SourceOverview(QFrame):
     

@@ -170,66 +170,65 @@ class CorrelationDashboard(QMainWindow):
         self.timeline_widget.focus_on_gap(gap)
 
     def attempt_correlation(self):
-        # Run gap detection and populate both the table and timeline lanes
 
+        # Run gap detection and populate both the table and timeline lanes
         # Clear stale caches
         self._cached_browser_events = None
         self._cached_gaps = None
-
+ 
         # Update checkbox states
         self.correlation_selection_table.update_selection_states()
         selected_fields = self.correlation_selection_table.get_selected_fields_by_file()
         print("Selected fields by file:", selected_fields)
-
+ 
         # Load packet data
         packets_by_file = self._get_packets_for_files(selected_fields.keys())
-
+ 
         # Build timeline events via correlation engine
         timeline_data = self.correlation_engine.prepare_timeline_data(
             packets_by_file, selected_fields
         )
         self._last_timeline_data = timeline_data
-
+ 
         # Load PCAP lanes into timeline
         self.timeline_widget.load_timeline_data(timeline_data)
-
+ 
         # Extract domain events for gap detection
         pcap_domain_events = [
             e for events in timeline_data.values()
             for e in events if e.event_type == 'domain'
         ]
-
+ 
         # Parse browser history
         browser_events = self._get_browser_history()
-
+ 
         if not browser_events:
             print("No browser history found — upload a History.db file to the evidence folder.")
             return
-
+ 
         # Find gaps between pcap domains and browser history
         detector = GapDetector(time_window_seconds=60)
         grouped_gaps = detector.find_gaps_grouped(pcap_domain_events, browser_events)
-
-        if not grouped_gaps:
-            print("No incognito gaps detected — all traffic matches browser history.")
-            return
-
+ 
         self._cached_gaps = grouped_gaps
-
+ 
+        # Group normal browser events by domain for the unified table
+        normal_entries = self._group_browser_events(browser_events)
+ 
         # Save run and gaps to DB
         pcap_files = list(selected_fields.keys())
         self.current_run_id = save_run(self.case_id, pcap_files, grouped_gaps)
-
-        # Populate incognito table — bookmarks restore automatically via case_id
-        self.incognito_widget.load_gaps(grouped_gaps)
-
-        # Add incognito gap lane underneath the PCAP lanes
-        self.timeline_widget.load_incognito_gaps(
+ 
+        # Populate unified browser activity table
+        self.incognito_widget.load_all_entries(grouped_gaps, normal_entries)
+ 
+        # Add browser activity lane underneath the PCAP lanes
+        self.timeline_widget.load_browser_activity(
             grouped_gaps,
+            browser_events,
             gap_table_ref=self.incognito_widget
         )
-
-        # Make timeline visible if hidden
+ 
         if not self.timeline_widget.isVisible():
             self._toggle_timeline()
 
@@ -261,6 +260,32 @@ class CorrelationDashboard(QMainWindow):
                 print(f"Warning: no packet data found for {fn}")
 
         return packets_by_file
+    
+    def _group_browser_events(self, browser_events) -> list:
+
+        # Group raw browser history events by domain into the same dict shape as gaps
+        grouped = {}
+        for ev in browser_events:
+            domain = ev.value
+            if not domain:
+                continue
+            if domain not in grouped:
+                grouped[domain] = {
+                    'domain': domain,
+                    'count': 0,
+                    'category': 'Browser History',
+                    'first_seen': ev.timestamp,
+                    'last_seen': ev.timestamp,
+                    'entry_type': 'normal',
+                }
+            g = grouped[domain]
+            g['count'] += 1
+            if ev.timestamp < g['first_seen']:
+                g['first_seen'] = ev.timestamp
+            if ev.timestamp > g['last_seen']:
+                g['last_seen'] = ev.timestamp
+
+        return sorted(grouped.values(), key=lambda x: x['first_seen'])
 
     def _get_browser_history(self):
         if self._cached_browser_events is not None:

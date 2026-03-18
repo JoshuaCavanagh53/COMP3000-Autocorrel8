@@ -40,5 +40,26 @@ LIGHT_THEME = {
     'correlation_line': '#CA5010',
 }
 
+AETHER_THEME = {
+    'background': '#0D0F14',
+    'surface': '#12151D',
+    'surface_elevated': '#1A1E2A',
+    'border': '#252A3A',
+    'text_primary': '#E8EAEF',
+    'text_secondary': '#5B6478',
+    'accent': '#7C3AED',
+    'accent_hover': '#9D5FF5',
+    'nav_bg': '#12151D',
+    'button_bg': '#1A1E2A',
+    'button_checked': '#2D1D5E',
+    # Timeline specific colors
+    'timeline_bg': '#0D0F14',
+    'event_domain': '#7C3AED',
+    'event_ip': '#EC4899',
+    'event_port': '#06B6D4',
+    'correlation_line': '#F59E0B',
+}
+
+
 # Set your active theme
-THEME = DARK_THEME  # or LIGHT_THEME
+THEME = AETHER_THEME  # or LIGHT_THEME or DARK_THEME

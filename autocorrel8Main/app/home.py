@@ -13,13 +13,10 @@ from pathlib import Path
 import datetime
 import shutil
 from overviewDash import OverviewDashBoard
-from themes import DARK_THEME, LIGHT_THEME
+from themes import THEME
 
 
 # Dark mode by default
-CURRENT_THEME = 'dark'
-THEME = DARK_THEME if CURRENT_THEME == 'dark' else LIGHT_THEME
-
 
 # Top navigation bar
 class TopNavBar(QFrame):

@@ -168,6 +168,7 @@ class PCAPTimeline(QWidget):
             self.clusters.append(EventCluster(cur, s, cur[-1].x_pos))
 
     def set_visible_events(self, event_set):
+
         # Filter which events are drawn, pass None to restore show all
         self.visible_event_set = event_set
         if event_set is None:
@@ -277,7 +278,6 @@ class PCAPTimeline(QWidget):
         super().mousePressEvent(event)
 
     # Painting
-
     def _compute_expanded_rect(self, cluster):
         DOT_R = 5; COL_SPC = 22; ROW_SPC = 22
         H_PAD = 14; V_PAD_TOP = 24; V_PAD_BOT = 10; MAX_COLS = 10
@@ -545,19 +545,21 @@ class TimestampAxis(QWidget):
             cur += timedelta(seconds=minor)
 
 
-# Incognito gap lane showing suspected incognito browsing activity
+# Browser activity lane — shows incognito gaps (red) and normal history (gray) together
 class IncognitoGapTimeline(QWidget):
     def __init__(self, gap_data, start_time, end_time,
-                 height=120, pixels_per_second=50):
+                 normal_events=None, height=120, pixels_per_second=50):
         super().__init__()
         self.gap_data = gap_data
+        self.normal_events = normal_events or []
         self.start_time = start_time
         self.end_time = end_time
         self.timeline_height = height
         self.pixels_per_second = pixels_per_second
         self.hovered_gap = None
         self.highlighted_domain = None
-        self._dot_positions = []
+        self._dot_positions = []        # gap dots: (x, y, gap_dict)
+        self._normal_dot_positions = [] # normal dots: (x, y, domain)
         self._sessions = []
         self._gap_table_ref = None
 
@@ -583,11 +585,23 @@ class IncognitoGapTimeline(QWidget):
 
     def _compute_dot_positions(self):
         self._dot_positions = []
+        self._normal_dot_positions = []
         tl_y = self.height() // 2 or self.timeline_height // 2
+
         for gap in self.gap_data:
             elapsed = (gap['first_seen'] - self.start_time).total_seconds()
             x = 100 + int(elapsed * self.pixels_per_second)
             self._dot_positions.append((x, tl_y, gap))
+
+        # Deduplicate normal events by domain — use first occurrence x position
+        seen_domains = {}
+        for ev in self.normal_events:
+            if not ev.value or ev.value in seen_domains:
+                continue
+            elapsed = (ev.timestamp - self.start_time).total_seconds()
+            x = 100 + int(elapsed * self.pixels_per_second)
+            self._normal_dot_positions.append((x, tl_y, ev.value))
+            seen_domains[ev.value] = x
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -636,7 +650,7 @@ class IncognitoGapTimeline(QWidget):
         font.setPointSize(10)
         font.setBold(True)
         painter.setFont(font)
-        painter.drawText(QRect(10, 10, 85, 20), Qt.AlignLeft | Qt.AlignVCenter, "Incognito")
+        painter.drawText(QRect(10, 10, 85, 20), Qt.AlignLeft | Qt.AlignVCenter, "Browser")
 
         tl_y = self.height() // 2
         vp = self.visibleRegion().boundingRect()
@@ -656,6 +670,15 @@ class IncognitoGapTimeline(QWidget):
         painter.setPen(QPen(QColor(THEME['border']), 2))
         painter.drawLine(100, tl_y, self.width() - 20, tl_y)
 
+        # Normal history dots — small gray, drawn first so gap dots appear on top
+        for x, y, domain in self._normal_dot_positions:
+            if x < vp.left() - 50 or x > vp.right() + 50:
+                continue
+            painter.setBrush(QBrush(QColor("#4a7a4a")))
+            painter.setPen(QPen(QColor("#2d5c2d"), 1))
+            painter.drawEllipse(x - 3, y - 3, 6, 6)
+
+        # Gap dots — larger, red-coded by suspiciousness
         for x, y, gap in self._dot_positions:
             if x < vp.left() - 50 or x > vp.right() + 50:
                 continue
@@ -675,7 +698,7 @@ class IncognitoGapTimeline(QWidget):
             else:
                 painter.setBrush(QBrush(QColor(color)))
                 painter.setPen(QPen(QColor(color).darker(120), 1))
-                painter.drawEllipse(x - 4, y - 4, 8, 8)
+                painter.drawEllipse(x - 5, y - 5, 10, 10)
 
         if self.hovered_gap:
             self._draw_tooltip(painter, self.hovered_gap)
@@ -730,11 +753,11 @@ class IncognitoGapTimeline(QWidget):
     def mousePressEvent(self, event):
         if event.button() != Qt.LeftButton or not self.hovered_gap:
             return
-        # Select matching row in the gap table
         if self._gap_table_ref and hasattr(self._gap_table_ref, '_table'):
             tbl = self._gap_table_ref._table
+            domain_col = getattr(self._gap_table_ref, '_COL_DOMAIN', 1)
             for row in range(tbl.rowCount()):
-                item = tbl.item(row, 0)
+                item = tbl.item(row, domain_col)
                 if item and item.text() == self.hovered_gap['domain']:
                     tbl.selectRow(row)
                     tbl.scrollToItem(item)
@@ -851,7 +874,7 @@ class TimelineInfoPanel(QFrame):
 
     def _detail(self, lay, label, value):
         disp = (str(value)[:32] + "...") if len(str(value)) > 35 else str(value)
-        row = QLabel(f"<span style='color:{THEME['text_secondary']};'>{label}</span> <b>{disp}</b>")
+        row = QLabel(f"<b>{label}</b> {disp}")
         row.setWordWrap(True)
         row.setStyleSheet(f"color: {THEME['text_primary']}; font-size: 9px;")
         lay.addWidget(row)
@@ -871,6 +894,7 @@ class CrossPCAPTimelineWidget(QFrame):
         # Cached so the incognito lane survives rebuilds
         self._incognito_gap_data = None
         self._incognito_gap_table = None
+        self._normal_events = None
         # Focus mode state
         self._in_focus = False
         self._focus_window = None
@@ -918,7 +942,7 @@ class CrossPCAPTimelineWidget(QFrame):
         focus_bar_layout.addWidget(self._focus_label)
         focus_bar_layout.addStretch()
 
-        exit_btn = QPushButton("✕  Exit Focus")
+        exit_btn = QPushButton("X  Exit Focus")
         exit_btn.setFixedHeight(24)
         exit_btn.setCursor(Qt.PointingHandCursor)
         exit_btn.setStyleSheet("""
@@ -1027,9 +1051,10 @@ class CrossPCAPTimelineWidget(QFrame):
         self.pixels_per_second = max(1.0, available / total_sec)
         self._rebuild_timelines()
 
-    def load_incognito_gaps(self, gap_data, gap_table_ref=None):
-        # Cache gap data so _rebuild_timelines can restore the lane after zoom/fit
+    def load_browser_activity(self, gap_data, normal_events=None, gap_table_ref=None):
+        # Cache everything so _rebuild_timelines can restore after zoom/fit
         self._incognito_gap_data = gap_data
+        self._normal_events = normal_events or []
         self._incognito_gap_table = gap_table_ref
         self._insert_incognito_lane()
 
@@ -1119,8 +1144,22 @@ class CrossPCAPTimelineWidget(QFrame):
         lane_start = self._focus_window[0] if self._focus_window else self.start_time
         lane_end = self._focus_window[1] if self._focus_window else self.end_time
 
-        # Thin labelled divider between PCAP lanes and the incognito lane
-        self._sep_label = QLabel("  ▼  Potential Incognito Activity")
+        # In focus mode only show gaps within the window, otherwise show all
+        if self._focus_window:
+            lane_gaps = [
+                g for g in self._incognito_gap_data
+                if lane_start <= g['first_seen'] <= lane_end
+            ]
+            # Always include the focused gap itself even if it sits on the boundary
+            if self._focused_gap and self._focused_gap not in lane_gaps:
+                lane_gaps = [self._focused_gap] + lane_gaps
+        else:
+            lane_gaps = self._incognito_gap_data
+
+        if not lane_gaps:
+            lane_gaps = self._incognito_gap_data
+
+        self._sep_label = QLabel("  ▼  Browser Activity  ( ● Incognito gaps   ● Normal history )")
         self._sep_label.setFixedHeight(28)
         self._sep_label.setStyleSheet(f"""
             background-color: {THEME['accent']};
@@ -1131,7 +1170,9 @@ class CrossPCAPTimelineWidget(QFrame):
         """)
 
         self._incognito_lane = IncognitoGapTimeline(
-            self._incognito_gap_data, lane_start, lane_end,
+            lane_gaps, lane_start, lane_end,
+            normal_events=[ev for ev in (self._normal_events or [])
+                           if lane_start <= ev.timestamp <= lane_end],
             height=160, pixels_per_second=self.pixels_per_second
         )
         if self._incognito_gap_table:
@@ -1191,7 +1232,7 @@ class CrossPCAPTimelineWidget(QFrame):
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
-        # Don't refit while in focus mode — it would reset the zoom
+        # Don't refit while in focus mode, it would reset the zoom
         if not self._in_focus:
             QTimer.singleShot(50, self._fit_to_viewport)
 

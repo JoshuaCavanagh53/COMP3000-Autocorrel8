@@ -14,6 +14,18 @@ def get_connection() -> sqlite3.Connection:
     conn.execute("PRAGMA foreign_keys = ON")
     return conn
 
+def _migrate_db():
+    # Adds columns introduced after the initial schema without dropping existing data
+    migrations = [
+        "ALTER TABLE bookmarks ADD COLUMN notes TEXT DEFAULT ''",
+    ]
+    with get_connection() as conn:
+        for sql in migrations:
+            try:
+                conn.execute(sql)
+            except sqlite3.OperationalError:
+                pass  # Column already exists
+
 
 def init_db():
     # Read schema from file and execute it
@@ -21,6 +33,7 @@ def init_db():
         schema = f.read()
     with get_connection() as conn:
         conn.executescript(schema)
+    _migrate_db()
 
 
 # Cases 
@@ -181,12 +194,21 @@ def remove_bookmark(case_id: int, domain: str):
         )
 
 
-def get_bookmarks_for_case(case_id: int) -> set:
+def get_bookmarks_for_case(case_id: int) -> dict:
+    # Returns {domain: notes} for all bookmarks on this case
     with get_connection() as conn:
         rows = conn.execute(
-            "SELECT domain FROM bookmarks WHERE case_id = ?", (case_id,)
+            "SELECT domain, notes FROM bookmarks WHERE case_id = ?", (case_id,)
         ).fetchall()
-        return {r['domain'] for r in rows}
+        return {r['domain']: (r['notes'] or '') for r in rows}
+    
+
+def update_bookmark_note(case_id: int, domain: str, note: str):
+    with get_connection() as conn:
+        conn.execute(
+            "UPDATE bookmarks SET notes = ? WHERE case_id = ? AND domain = ?",
+            (note, case_id, domain)
+        )
 
 
 def toggle_bookmark(case_id: int, domain: str, bookmarked: bool):
