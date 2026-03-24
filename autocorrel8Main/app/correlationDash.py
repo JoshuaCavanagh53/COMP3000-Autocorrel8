@@ -1,7 +1,7 @@
 import os
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QLabel,
-    QPushButton, QVBoxLayout, QHBoxLayout, QFrame
+    QPushButton, QVBoxLayout, QHBoxLayout, QFrame, QStackedWidget, QButtonGroup
 )
 from PyQt5.QtCore import Qt
 import sys
@@ -14,6 +14,7 @@ from correlationEngine import CorrelationEngine, GapDetector
 from timelineCorrelation import CrossPCAPTimelineWidget
 from browserLogParser import BrowserLogParser
 from database import init_db, create_case, get_packets, save_packets, save_run
+from registryWidget import RegistryWidget
 
 
 class CorrelationDashboard(QMainWindow):
@@ -100,13 +101,79 @@ class CorrelationDashboard(QMainWindow):
 
         top_section.addWidget(self.left_panel)
 
-        # Incognito gaps widget
+         # Right panel
+        right_panel = QWidget()
+        right_panel.setMinimumWidth(550)
+        right_layout = QVBoxLayout(right_panel)
+        right_layout.setContentsMargins(0, 0, 0, 0)
+        right_layout.setSpacing(0)
+ 
+        # Panel tab bar
+        panel_tab_bar = QWidget()
+        panel_tab_bar.setFixedHeight(38)
+        panel_tab_bar.setStyleSheet(f"""
+            QWidget {{
+                background-color: {THEME['surface']};
+                border-bottom: 1px solid {THEME['border']};
+            }}
+        """)
+        panel_tab_layout = QHBoxLayout(panel_tab_bar)
+        panel_tab_layout.setContentsMargins(8, 4, 8, 0)
+        panel_tab_layout.setSpacing(2)
+ 
+        tab_style = f"""
+            QPushButton {{
+                background-color: transparent;
+                color: {THEME['text_secondary']};
+                border: none;
+                border-bottom: 2px solid transparent;
+                padding: 4px 16px;
+                font-size: 13px;
+                font-weight: 500;
+            }}
+            QPushButton:checked {{
+                color: {THEME['accent']};
+                border-bottom: 2px solid {THEME['accent']};
+            }}
+            QPushButton:hover:!checked {{
+                color: {THEME['text_primary']};
+            }}
+        """
+ 
+        self._panel_group = QButtonGroup(self)
+        self._panel_group.setExclusive(True)
+ 
+        browser_tab_btn = QPushButton("Browser Activity")
+        registry_tab_btn = QPushButton("Registry")
+ 
+        for i, btn in enumerate((browser_tab_btn, registry_tab_btn)):
+            btn.setCheckable(True)
+            btn.setStyleSheet(tab_style)
+            btn.setCursor(Qt.PointingHandCursor)
+            panel_tab_layout.addWidget(btn)
+            self._panel_group.addButton(btn, i)
+ 
+        browser_tab_btn.setChecked(True)
+        panel_tab_layout.addStretch()
+ 
+        right_layout.addWidget(panel_tab_bar)
+ 
+        # Stacked widget
+        self._right_stack = QStackedWidget()
+ 
         self.incognito_widget = IncognitoGapWidget()
-        self.incognito_widget.setMinimumWidth(550)
         self.incognito_widget.set_case_id(self.case_id)
         self.incognito_widget.eventSelected.connect(self._on_incognito_event_selected)
-        top_section.addWidget(self.incognito_widget, 1)
-
+        self._right_stack.addWidget(self.incognito_widget)   
+ 
+        self.registry_widget = RegistryWidget()
+        self._right_stack.addWidget(self.registry_widget)   
+ 
+        self._panel_group.idClicked.connect(self._right_stack.setCurrentIndex)
+ 
+        right_layout.addWidget(self._right_stack, 1)
+        top_section.addWidget(right_panel, 1)
+ 
         content_layout.addLayout(top_section)
 
         # Toggle timeline button

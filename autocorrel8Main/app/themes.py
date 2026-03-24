@@ -62,4 +62,5 @@ AETHER_THEME = {
 
 
 # Set your active theme
-THEME = AETHER_THEME  # or LIGHT_THEME or DARK_THEME
+THEME = {}
+THEME.update(AETHER_THEME)

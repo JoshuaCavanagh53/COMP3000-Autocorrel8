@@ -2,7 +2,7 @@ from PyQt5.QtWidgets import (
     QFrame, QWidget, QLabel, QPushButton, QTextEdit,
     QVBoxLayout, QHBoxLayout,
     QTableWidget, QTableWidgetItem, QAbstractItemView,
-    QButtonGroup, QHeaderView,
+    QButtonGroup, QHeaderView, QLineEdit
 )
 from PyQt5.QtCore import Qt, pyqtSignal, QTimer
 from PyQt5.QtGui import QColor
@@ -83,8 +83,7 @@ class _TabBar(QWidget):
 class _NotesPanel(QFrame):
     
     # Shown below the table when a bookmarked incognito row is selected.
-    # Saves 600 ms after the user stops typing.
-    noteChanged = pyqtSignal(str, str)  # domain, note text
+    noteChanged = pyqtSignal(str, str)  
 
     def __init__(self):
         super().__init__()
@@ -226,6 +225,26 @@ class IncognitoGapWidget(QFrame):
         self._tabs.tabChanged.connect(self._apply_tab)
         root.addWidget(self._tabs)
 
+        # Search bar
+        self._search = QLineEdit()
+        self._search.setPlaceholderText("Filter by domain…")
+        self._search.setClearButtonEnabled(True)
+        self._search.setStyleSheet(f"""
+            QLineEdit {{
+                background-color: {THEME['surface']};
+                color: {THEME['text_primary']};
+                border: 1px solid {THEME['border']};
+                border-radius: 4px;
+                padding: 5px 8px;
+                font-size: 12px;
+            }}
+            QLineEdit:focus {{
+                border: 1px solid {THEME['accent']};
+            }}
+        """)
+        self._search.textChanged.connect(lambda _: self._apply_tab(self._tabs._group.checkedId()))
+        root.addWidget(self._search)
+
         # Table
         self._table = QTableWidget()
         self._table.setColumnCount(len(self._COLS))
@@ -306,11 +325,17 @@ class IncognitoGapWidget(QFrame):
     # Internal
     def _apply_tab(self, tab_id: int):
         if tab_id == _TAB_ALL:
-            self._populate(self._all_entries)
+            entries = self._all_entries
         elif tab_id == _TAB_INCOGNITO:
-            self._populate([e for e in self._all_entries if e.get('entry_type') == TYPE_INCOGNITO])
+            entries = [e for e in self._all_entries if e.get('entry_type') == TYPE_INCOGNITO]
         else:
-            self._populate(self.get_bookmarked_gaps())
+            entries = self.get_bookmarked_gaps()
+ 
+        query = self._search.text().strip().lower()
+        if query:
+            entries = [e for e in entries if query in e['domain'].lower()]
+ 
+        self._populate(entries)
 
     def _populate(self, entries: list[dict]):
         self._table.setSortingEnabled(False)

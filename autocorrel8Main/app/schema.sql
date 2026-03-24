@@ -1,5 +1,3 @@
--- AutoCorrel8 database schema
-
 CREATE TABLE IF NOT EXISTS cases (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
     name         TEXT NOT NULL,
