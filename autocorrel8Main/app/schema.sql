@@ -44,3 +44,13 @@ CREATE TABLE IF NOT EXISTS bookmarks (
     created_at TEXT DEFAULT (datetime('now')),
     UNIQUE(case_id, domain)
 );
+
+CREATE TABLE IF NOT EXISTS registry_bookmarks (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    case_id     INTEGER NOT NULL REFERENCES cases(id),
+    key_path    TEXT NOT NULL,
+    value_name  TEXT NOT NULL,
+    notes       TEXT DEFAULT '',
+    created_at  TEXT DEFAULT (datetime('now')),
+    UNIQUE(case_id, key_path, value_name)
+);

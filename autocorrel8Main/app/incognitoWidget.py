@@ -74,7 +74,7 @@ class _TabBar(QWidget):
             btn.setCursor(Qt.PointingHandCursor)
             layout.addWidget(btn)
             self._group.addButton(btn, tab_id)
-
+   
         self._group.button(_TAB_ALL).setChecked(True)
         self._group.idClicked.connect(self.tabChanged)
         layout.addStretch()
@@ -223,7 +223,9 @@ class IncognitoGapWidget(QFrame):
         # Tabs
         self._tabs = _TabBar()
         self._tabs.tabChanged.connect(self._apply_tab)
+
         root.addWidget(self._tabs)
+
 
         # Search bar
         self._search = QLineEdit()
@@ -300,6 +302,10 @@ class IncognitoGapWidget(QFrame):
         self._notes_panel.noteChanged.connect(self._save_note)
         self._notes_panel.hide()
         root.addWidget(self._notes_panel)
+
+    def set_action_button(self, button: QPushButton):
+            # Correlation button 
+            self._tabs.layout().addWidget(button)
 
     # Public API
     def load_all_entries(self, gap_data: list[dict], normal_entries: list[dict]):

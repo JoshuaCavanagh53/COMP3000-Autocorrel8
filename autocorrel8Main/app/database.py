@@ -19,12 +19,26 @@ def _migrate_db():
     migrations = [
         "ALTER TABLE bookmarks ADD COLUMN notes TEXT DEFAULT ''",
     ]
+    # New tables that may not exist on older databases
+    table_migrations = [
+        """CREATE TABLE IF NOT EXISTS registry_bookmarks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            case_id INTEGER NOT NULL REFERENCES cases(id),
+            key_path TEXT NOT NULL,
+            value_name TEXT NOT NULL,
+            notes TEXT DEFAULT '',
+            created_at TEXT DEFAULT (datetime('now')),
+            UNIQUE(case_id, key_path, value_name)
+        )"""
+    ]
     with get_connection() as conn:
         for sql in migrations:
             try:
                 conn.execute(sql)
             except sqlite3.OperationalError:
-                pass  # Column already exists
+                pass
+        for sql in table_migrations:
+            conn.executescript(sql)
 
 
 def init_db():
@@ -195,7 +209,6 @@ def remove_bookmark(case_id: int, domain: str):
 
 
 def get_bookmarks_for_case(case_id: int) -> dict:
-    # Returns {domain: notes} for all bookmarks on this case
     with get_connection() as conn:
         rows = conn.execute(
             "SELECT domain, notes FROM bookmarks WHERE case_id = ?", (case_id,)
@@ -216,3 +229,45 @@ def toggle_bookmark(case_id: int, domain: str, bookmarked: bool):
         add_bookmark(case_id, domain)
     else:
         remove_bookmark(case_id, domain)
+
+
+# Registry bookmarks
+def add_registry_bookmark(case_id: int, key_path: str, value_name: str):
+    with get_connection() as conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO registry_bookmarks (case_id, key_path, value_name, notes) VALUES (?, ?, ?, '')",
+            (case_id, key_path, value_name)
+        )
+ 
+ 
+def remove_registry_bookmark(case_id: int, key_path: str, value_name: str):
+    with get_connection() as conn:
+        conn.execute(
+            "DELETE FROM registry_bookmarks WHERE case_id = ? AND key_path = ? AND value_name = ?",
+            (case_id, key_path, value_name)
+        )
+ 
+ 
+def get_registry_bookmarks_for_case(case_id: int) -> dict:
+    # Returns {(key_path, value_name): notes}
+    with get_connection() as conn:
+        rows = conn.execute(
+            "SELECT key_path, value_name, notes FROM registry_bookmarks WHERE case_id = ?",
+            (case_id,)
+        ).fetchall()
+        return {(r['key_path'], r['value_name']): (r['notes'] or '') for r in rows}
+ 
+ 
+def update_registry_bookmark_note(case_id: int, key_path: str, value_name: str, note: str):
+    with get_connection() as conn:
+        conn.execute(
+            "UPDATE registry_bookmarks SET notes = ? WHERE case_id = ? AND key_path = ? AND value_name = ?",
+            (note, case_id, key_path, value_name)
+        )
+ 
+ 
+def toggle_registry_bookmark(case_id: int, key_path: str, value_name: str, bookmarked: bool):
+    if bookmarked:
+        add_registry_bookmark(case_id, key_path, value_name)
+    else:
+        remove_registry_bookmark(case_id, key_path, value_name)

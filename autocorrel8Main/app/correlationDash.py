@@ -15,6 +15,7 @@ from timelineCorrelation import CrossPCAPTimelineWidget
 from browserLogParser import BrowserLogParser
 from database import init_db, create_case, get_packets, save_packets, save_run
 from registryWidget import RegistryWidget
+from registryTimeline import RegistryTimelineWidget
 
 
 class CorrelationDashboard(QMainWindow):
@@ -58,12 +59,12 @@ class CorrelationDashboard(QMainWindow):
         content_layout.setContentsMargins(0, 0, 0, 0)
         content_layout.setSpacing(0)
 
-        # Top section with left panel and incognito widget
+        # Top section with left panel and right panel
         top_section = QHBoxLayout()
         top_section.setSpacing(0)
         top_section.setContentsMargins(0, 0, 0, 0)
 
-        # Left panel: tab buttons, correlation selection, run button
+        # Left panel
         self.left_panel = QWidget()
         self.left_panel.setMaximumWidth(480)
         left_layout = QVBoxLayout(self.left_panel)
@@ -73,41 +74,15 @@ class CorrelationDashboard(QMainWindow):
         # Correlation engine
         self.correlation_engine = CorrelationEngine()
 
-        # Selection table
-        self.correlation_selection_table = CorrelationSelectionTable(self.path)
-        left_layout.addWidget(self.correlation_selection_table)
-
-        # Attempt correlation button
-        self.run_button = QPushButton("🔍  Attempt Correlation")
-        self.run_button.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {THEME['accent']};
-                color: white;
-                border: none;
-                border-radius: 4px;
-                padding: 10px 16px;
-                font-size: 13px;
-                font-weight: bold;
-            }}
-            QPushButton:hover {{
-                background-color: {THEME['accent_hover']};
-            }}
-            QPushButton:pressed {{
-                background-color: {THEME['button_checked']};
-            }}
-        """)
-        self.run_button.clicked.connect(self.attempt_correlation)
-        left_layout.addWidget(self.run_button)
-
         top_section.addWidget(self.left_panel)
 
-         # Right panel
+        # Right panel
         right_panel = QWidget()
         right_panel.setMinimumWidth(550)
         right_layout = QVBoxLayout(right_panel)
         right_layout.setContentsMargins(0, 0, 0, 0)
         right_layout.setSpacing(0)
- 
+
         # Panel tab bar
         panel_tab_bar = QWidget()
         panel_tab_bar.setFixedHeight(38)
@@ -120,7 +95,7 @@ class CorrelationDashboard(QMainWindow):
         panel_tab_layout = QHBoxLayout(panel_tab_bar)
         panel_tab_layout.setContentsMargins(8, 4, 8, 0)
         panel_tab_layout.setSpacing(2)
- 
+
         tab_style = f"""
             QPushButton {{
                 background-color: transparent;
@@ -139,41 +114,59 @@ class CorrelationDashboard(QMainWindow):
                 color: {THEME['text_primary']};
             }}
         """
- 
+
         self._panel_group = QButtonGroup(self)
         self._panel_group.setExclusive(True)
- 
+
         browser_tab_btn = QPushButton("Browser Activity")
         registry_tab_btn = QPushButton("Registry")
- 
+
         for i, btn in enumerate((browser_tab_btn, registry_tab_btn)):
             btn.setCheckable(True)
             btn.setStyleSheet(tab_style)
             btn.setCursor(Qt.PointingHandCursor)
             panel_tab_layout.addWidget(btn)
             self._panel_group.addButton(btn, i)
- 
+
         browser_tab_btn.setChecked(True)
         panel_tab_layout.addStretch()
- 
+
+        # Attempt correlation button, lives in the tab bar, right side
+        self.run_button = QPushButton("🔍  Attempt Correlation")
+        self.run_button.setFixedHeight(26)
+        self.run_button.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {THEME['accent']};
+                color: white;
+                border: none;
+                border-radius: 4px;
+                padding: 4px 14px;
+                font-size: 12px;
+                font-weight: bold;
+            }}
+            QPushButton:hover {{ background-color: {THEME['accent_hover']}; }}
+            QPushButton:pressed {{ background-color: {THEME['button_checked']}; }}
+        """)
+        self.run_button.clicked.connect(self.attempt_correlation)
+
         right_layout.addWidget(panel_tab_bar)
- 
-        # Stacked widget
+
+        # Right stacked widget, browser activity and registry
         self._right_stack = QStackedWidget()
- 
+
         self.incognito_widget = IncognitoGapWidget()
         self.incognito_widget.set_case_id(self.case_id)
         self.incognito_widget.eventSelected.connect(self._on_incognito_event_selected)
-        self._right_stack.addWidget(self.incognito_widget)   
- 
+        self.incognito_widget.set_action_button(self.run_button)
+        self._right_stack.addWidget(self.incognito_widget)  
+
         self.registry_widget = RegistryWidget()
-        self._right_stack.addWidget(self.registry_widget)   
- 
-        self._panel_group.idClicked.connect(self._right_stack.setCurrentIndex)
- 
+        self.registry_widget.set_case_id(self.case_id)
+        self._right_stack.addWidget(self.registry_widget)    
+
         right_layout.addWidget(self._right_stack, 1)
         top_section.addWidget(right_panel, 1)
- 
+
         content_layout.addLayout(top_section)
 
         # Toggle timeline button
@@ -208,6 +201,9 @@ class CorrelationDashboard(QMainWindow):
         toggle_layout.addWidget(self._timeline_toggle_btn)
         content_layout.addWidget(toggle_bar)
 
+        # Bottom timeline stack, network timeline index 0, registry timeline index 1
+        self._timeline_stack = QStackedWidget()
+
         self.timeline_widget = CrossPCAPTimelineWidget()
         self.timeline_widget.setStyleSheet(f"""
             QFrame {{
@@ -216,87 +212,118 @@ class CorrelationDashboard(QMainWindow):
             }}
         """)
         self.timeline_widget.setMinimumHeight(380)
-        content_layout.addWidget(self.timeline_widget, 1)
+        self._timeline_stack.addWidget(self.timeline_widget)   # index 0
+
+        self.registry_timeline = RegistryTimelineWidget()
+        self.registry_timeline.setMinimumHeight(380)
+        self.registry_timeline.set_registry_table(self.registry_widget)
+        self._timeline_stack.addWidget(self.registry_timeline) # index 1
+
+        # Wire registry widget to also update the timeline when compare runs
+        self.registry_widget.load_entries = self._registry_load_entries_hooked
+
+        # Highlight timeline dot when a registry table row is selected
+        self.registry_widget.entrySelected.connect(self.registry_timeline.highlight_entry)
+
+        content_layout.addWidget(self._timeline_stack, 1)
+
+        # Swap both stacks together when the tab changes
+        def on_tab_changed(index):
+            self._right_stack.setCurrentIndex(index)
+            self._timeline_stack.setCurrentIndex(index)
+            self.run_button.setVisible(index == 0)
+
+        self._panel_group.idClicked.connect(on_tab_changed)
 
         root.addWidget(content)
 
     def _toggle_timeline(self):
-        # Hiding the timeline also collapses the selection panel so the gap
-        # table expands to full width; tab buttons stay visible via left_panel header
-        if self.timeline_widget.isVisible():
-            self.timeline_widget.hide()
+        if self._timeline_stack.isVisible():
+            self._timeline_stack.hide()
             self.left_panel.hide()
             self._timeline_toggle_btn.setText("▲  Show")
         else:
-            self.timeline_widget.show()
+            self._timeline_stack.show()
             self.left_panel.show()
             self._timeline_toggle_btn.setText("▼  Hide")
 
+    def _registry_load_entries_hooked(self, entries):
+        # Call the real load_entries on the registry widget then feed the timeline
+        RegistryWidget.load_entries(self.registry_widget, entries)
+        self.registry_timeline.load_entries(entries)
+
     def _on_incognito_event_selected(self, gap: dict):
-        # Focus the timeline on the selected gap's time window
+        # Focus the network timeline on the selected gap's time window
         self.timeline_widget.focus_on_gap(gap)
 
     def attempt_correlation(self):
-
-        # Run gap detection and populate both the table and timeline lanes
-        # Clear stale caches
         self._cached_browser_events = None
         self._cached_gaps = None
- 
-        # Update checkbox states
-        self.correlation_selection_table.update_selection_states()
-        selected_fields = self.correlation_selection_table.get_selected_fields_by_file()
-        print("Selected fields by file:", selected_fields)
- 
+
+        # Auto-discover PCAP files from evidence folder
+        evidence_dir = os.path.join(self.path, "evidence")
+        PCAP_EXTENSIONS = ('.pcap', '.pcapng', '.cap')
+        pcap_files = [
+            f for f in os.listdir(evidence_dir)
+            if os.path.isfile(os.path.join(evidence_dir, f))
+            and f.lower().endswith(PCAP_EXTENSIONS)
+        ]
+
+        if not pcap_files:
+            print("No PCAP files found in evidence folder.")
+            return
+
+        # Build selected fields dict, all files with DNS Query selected
+        selected_fields = {fn: ['DNS Query'] for fn in pcap_files}
+
         # Load packet data
         packets_by_file = self._get_packets_for_files(selected_fields.keys())
- 
-        # Build timeline events via correlation engine
+
+        # Build timeline events
         timeline_data = self.correlation_engine.prepare_timeline_data(
             packets_by_file, selected_fields
         )
         self._last_timeline_data = timeline_data
- 
-        # Load PCAP lanes into timeline
+
+        # Load PCAP lanes into network timeline
         self.timeline_widget.load_timeline_data(timeline_data)
- 
+
         # Extract domain events for gap detection
         pcap_domain_events = [
             e for events in timeline_data.values()
             for e in events if e.event_type == 'domain'
         ]
- 
+
         # Parse browser history
         browser_events = self._get_browser_history()
- 
+
         if not browser_events:
             print("No browser history found — upload a History.db file to the evidence folder.")
             return
- 
+
         # Find gaps between pcap domains and browser history
         detector = GapDetector(time_window_seconds=60)
         grouped_gaps = detector.find_gaps_grouped(pcap_domain_events, browser_events)
- 
+
         self._cached_gaps = grouped_gaps
- 
+
         # Group normal browser events by domain for the unified table
         normal_entries = self._group_browser_events(browser_events)
- 
+
         # Save run and gaps to DB
-        pcap_files = list(selected_fields.keys())
         self.current_run_id = save_run(self.case_id, pcap_files, grouped_gaps)
- 
+
         # Populate unified browser activity table
         self.incognito_widget.load_all_entries(grouped_gaps, normal_entries)
- 
+
         # Add browser activity lane underneath the PCAP lanes
         self.timeline_widget.load_browser_activity(
             grouped_gaps,
             browser_events,
             gap_table_ref=self.incognito_widget
         )
- 
-        if not self.timeline_widget.isVisible():
+
+        if not self._timeline_stack.isVisible():
             self._toggle_timeline()
 
     def _get_packets_for_files(self, filenames) -> dict:
@@ -310,10 +337,10 @@ class CorrelationDashboard(QMainWindow):
             # 2. Database
             data = get_packets(self.case_id, fn)
 
-            # 3. Fallback - read old JSON file and migrate it into the DB
+            # 3. Fallback, read JSON file and migrate into the DB
             if not data:
                 import json
-                json_path = os.path.join("packetFiles", f"{fn}_packets.json")
+                json_path = os.path.join(os.path.dirname(__file__), "packetFiles", f"{fn}_packets.json")
                 if os.path.exists(json_path):
                     with open(json_path, "r") as f:
                         data = json.load(f)
@@ -327,9 +354,8 @@ class CorrelationDashboard(QMainWindow):
                 print(f"Warning: no packet data found for {fn}")
 
         return packets_by_file
-    
-    def _group_browser_events(self, browser_events) -> list:
 
+    def _group_browser_events(self, browser_events) -> list:
         # Group raw browser history events by domain into the same dict shape as gaps
         grouped = {}
         for ev in browser_events:
