@@ -54,3 +54,13 @@ CREATE TABLE IF NOT EXISTS registry_bookmarks (
     created_at  TEXT DEFAULT (datetime('now')),
     UNIQUE(case_id, key_path, value_name)
 );
+
+CREATE TABLE IF NOT EXISTS evidence_hashes (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    case_id     INTEGER NOT NULL REFERENCES cases(id),
+    filename    TEXT NOT NULL,
+    hash_sha256 TEXT NOT NULL,
+    hashed_at   TEXT DEFAULT (datetime('now')),
+    file_type   TEXT,
+    UNIQUE(case_id, filename)
+);

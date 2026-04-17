@@ -29,8 +29,20 @@ def _migrate_db():
             notes TEXT DEFAULT '',
             created_at TEXT DEFAULT (datetime('now')),
             UNIQUE(case_id, key_path, value_name)
+        )""",
+
+        """CREATE TABLE IF NOT EXISTS evidence_hashes (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            case_id     INTEGER NOT NULL REFERENCES cases(id),
+            filename    TEXT NOT NULL,
+            hash_sha256 TEXT NOT NULL,
+            hashed_at   TEXT DEFAULT (datetime('now')),
+            file_type   TEXT,
+            UNIQUE(case_id, filename)
         )"""
+
     ]
+
     with get_connection() as conn:
         for sql in migrations:
             try:
@@ -38,7 +50,10 @@ def _migrate_db():
             except sqlite3.OperationalError:
                 pass
         for sql in table_migrations:
-            conn.executescript(sql)
+            try:
+                conn.execute(sql)
+            except sqlite3.OperationalError:
+                pass
 
 
 def init_db():
@@ -51,7 +66,6 @@ def init_db():
 
 
 # Cases 
-
 def create_case(name: str, path: str, investigator: str = None) -> int:
     with get_connection() as conn:
         cur = conn.execute(
@@ -271,3 +285,33 @@ def toggle_registry_bookmark(case_id: int, key_path: str, value_name: str, bookm
         add_registry_bookmark(case_id, key_path, value_name)
     else:
         remove_registry_bookmark(case_id, key_path, value_name)
+
+
+# Evidence hashes
+
+def store_evidence_hash(case_id: int, filename: str, hash_sha256: str, file_type: str = None):
+    with get_connection() as conn:
+        conn.execute(
+            """INSERT INTO evidence_hashes (case_id, filename, hash_sha256, file_type)
+               VALUES (?, ?, ?, ?)
+               ON CONFLICT(case_id, filename) DO UPDATE SET
+               hash_sha256 = excluded.hash_sha256,
+               hashed_at = datetime('now')""",
+            (case_id, filename, hash_sha256, file_type)
+        )
+
+def get_evidence_hash(case_id: int, filename: str) -> str | None:
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT hash_sha256 FROM evidence_hashes WHERE case_id = ? AND filename = ?",
+            (case_id, filename)
+        ).fetchone()
+        return row['hash_sha256'] if row else None
+
+def get_all_evidence_hashes(case_id: int) -> list:
+    with get_connection() as conn:
+        rows = conn.execute(
+            "SELECT filename, hash_sha256, hashed_at, file_type FROM evidence_hashes WHERE case_id = ?",
+            (case_id,)
+        ).fetchall()
+        return [dict(r) for r in rows]

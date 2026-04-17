@@ -2,6 +2,7 @@ import json
 import os
 import csv
 import re
+import hashlib
 
 
 KEY_CATEGORIES = {
@@ -55,8 +56,28 @@ KEY_CATEGORIES = {
 class RegistryParser:
 
     # File loading 
-    def load_file(self, path: str) -> dict:
-        # Auto-detects format from extension
+    def load_file(self, path: str, case_id: int = None) -> dict:
+        # Hash the raw file before parsing
+        self.last_hash = self._hash_file(path)
+        self.last_filename = os.path.basename(path)
+
+        # Store or verify hash 
+        if case_id is not None:
+            from database import store_evidence_hash, get_evidence_hash
+            stored = get_evidence_hash(case_id, self.last_filename)
+            if stored is None:
+                # First time seeing this file
+                store_evidence_hash(case_id, self.last_filename, self.last_hash, 'registry')
+                self.last_hash_status = 'new'
+            elif stored == self.last_hash:
+                # Hash matches
+                self.last_hash_status = 'verified'
+            else:
+                # Hash mismatch
+                self.last_hash_status = 'mismatch'
+        else:
+            self.last_hash_status = 'unchecked'
+
         ext = os.path.splitext(path)[1].lower()
         if ext == '.json':
             return self._load_json(path)
@@ -65,6 +86,13 @@ class RegistryParser:
         if ext == '.reg':
             return self._load_reg(path)
         raise ValueError(f"Unsupported format: {ext} — use .reg, .csv, or .json")
+
+    def _hash_file(self, path: str) -> str:
+        sha256 = hashlib.sha256()
+        with open(path, 'rb') as f:
+            for chunk in iter(lambda: f.read(8192), b''):
+                sha256.update(chunk)
+        return sha256.hexdigest()
 
     def _load_json(self, path: str) -> dict:
         with open(path, 'r') as f:
@@ -175,10 +203,17 @@ class RegistryParser:
 
     # Comparison
 
-    def compare(self, baseline_path: str, snapshot_path: str) -> list[dict]:
-        baseline = self.load_file(baseline_path)
-        snapshot = self.load_file(snapshot_path)
+    def compare(self, baseline_path: str, snapshot_path: str, case_id: int = None) -> list[dict]:
+        baseline = self.load_file(baseline_path, case_id=case_id)
+        self.baseline_hash_status = self.last_hash_status
+        self.baseline_hash = self.last_hash
+
+        snapshot = self.load_file(snapshot_path, case_id=case_id)
+        self.snapshot_hash_status = self.last_hash_status
+        self.snapshot_hash = self.last_hash
+
         changes = []
+
 
         all_keys = set(baseline) | set(snapshot)
         for key_path in all_keys:

@@ -2,7 +2,7 @@ from PyQt5.QtWidgets import (
     QFrame, QWidget, QLabel, QPushButton, QLineEdit, QTextEdit,
     QVBoxLayout, QHBoxLayout,
     QTableWidget, QTableWidgetItem, QAbstractItemView,
-    QButtonGroup, QFileDialog
+    QButtonGroup, QFileDialog, QHeaderView
 )
 from PyQt5.QtCore import Qt, pyqtSignal, QTimer
 from PyQt5.QtGui import QColor
@@ -14,6 +14,8 @@ from database import (
     toggle_registry_bookmark,
     update_registry_bookmark_note,
 )
+from registryParser import RegistryParser
+
 
 
 _TAB_ALL = 0
@@ -277,7 +279,7 @@ class RegistryWidget(QFrame):
         self._table.setColumnWidth(self._COL_BM, 35)
         self._table.horizontalHeader().setStretchLastSection(False)
 
-        from PyQt5.QtWidgets import QHeaderView
+   
         header = self._table.horizontalHeader()
         header.setSectionResizeMode(self._COL_KEY, QHeaderView.Stretch)
         header.setSectionResizeMode(self._COL_NEW, QHeaderView.Stretch)
@@ -343,14 +345,34 @@ class RegistryWidget(QFrame):
 
     def _run_comparison(self):
         try:
-            from registryParser import RegistryParser
             parser = RegistryParser()
-            results = parser.compare(self._baseline_path, self._snapshot_path)
-            if not results:
-                self._count_label.setText("No differences found between snapshots")
+            results = parser.compare(
+                self._baseline_path,
+                self._snapshot_path,
+                case_id=self.case_id
+            )
+
             self.load_entries(results)
+
+            b_status = self._hash_badge(parser.baseline_hash_status)
+            s_status = self._hash_badge(parser.snapshot_hash_status)
+            n_added = sum(1 for e in results if e.get('change_type') == 'added')
+            n_mod = sum(1 for e in results if e.get('change_type') == 'modified')
+            n_del = sum(1 for e in results if e.get('change_type') == 'deleted')
+            self._count_label.setText(
+                f"{n_added} added  ·  {n_mod} modified  ·  {n_del} deleted  |  Baseline: {b_status}  Snapshot: {s_status}"
+            )
+
         except Exception as e:
             self._count_label.setText(f"Error: {e}")
+
+    def _hash_badge(self, status: str) -> str:
+        return {
+            'new': '🔵 Hashed',
+            'verified': '🟢 Verified',
+            'mismatch': '🔴 HASH MISMATCH',
+            'unchecked': '⚪ Unchecked',
+        }.get(status, status)
 
     def _apply_tab(self, tab_id: int):
         if tab_id == _TAB_ALL:
