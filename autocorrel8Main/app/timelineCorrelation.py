@@ -38,7 +38,7 @@ class EventCluster:
     def toggle_expansion(self):
         self.expanded = not self.expanded
         if not self.expanded:
-            # Clear cached geometry so stale rects can't trigger false hits
+            # Clear cached geometry 
             self._expanded_rect = None
             self._dot_positions = []
         return self.expanded
@@ -114,21 +114,22 @@ class TimelineMinimap(QWidget):
 # Optimized timeline with clustering
 class PCAPTimeline(QWidget):
     def __init__(self, pcap_name, events, start_time, end_time,
-                 height=120, pixels_per_second=10):
+                 height=100, pixels_per_second=10, lane_index=0):
         super().__init__()
         self.pcap_name = pcap_name
         self.events = events
         self.start_time = start_time
         self.end_time = end_time
         self.timeline_height = height
+        self.lane_index = lane_index  
         self.highlighted_events = []
         self.pixels_per_second = pixels_per_second
         self.hovered_event = None
         self.hovered_cluster = None
         self.clusters = []
         self.use_clustering = True
-        self.cluster_threshold = 15  # events within 15px get clustered
-        self.visible_event_set = None  # None = show all; set = only show members
+        self.cluster_threshold = 15 
+        self.visible_event_set = None 
 
         self.setMinimumHeight(height)
         self.setMouseTracking(True)
@@ -169,7 +170,7 @@ class PCAPTimeline(QWidget):
 
     def set_visible_events(self, event_set):
 
-        # Filter which events are drawn, pass None to restore show all
+        # Filter which events are drawn
         self.visible_event_set = event_set
         if event_set is None:
             self._create_clusters()
@@ -233,7 +234,6 @@ class PCAPTimeline(QWidget):
         mx, my = event.x(), event.y()
         tl_y = self.height() // 2
 
-        # Events inside collapsed clusters shouldn't intercept clicks meant for the cluster bar
         clustered = set()
         for c in self.clusters:
             if not c.expanded:
@@ -294,7 +294,17 @@ class PCAPTimeline(QWidget):
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
-        painter.fillRect(self.rect(), QColor(THEME['timeline_bg']))
+
+        # Zebra stripe differentiation between stacked lanes
+        bg = QColor(THEME['timeline_bg'])
+        if self.lane_index % 2 == 1:
+            bg = bg.darker(108)
+        painter.fillRect(self.rect(), bg)
+
+        # Sidebar label 
+        painter.fillRect(0, 0, 100, self.height(), QColor(THEME['surface']))
+        painter.setPen(QPen(QColor(THEME['border']), 1))
+        painter.drawLine(100, 0, 100, self.height())
 
         # PCAP name label
         painter.setPen(QColor(THEME['text_primary']))
@@ -302,15 +312,17 @@ class PCAPTimeline(QWidget):
         font.setPointSize(10)
         font.setBold(True)
         painter.setFont(font)
-        painter.drawText(QRect(10, 10, 85, 20), Qt.AlignLeft | Qt.AlignVCenter, self.pcap_name)
+        painter.drawText(QRect(10, 0, 85, self.height()), Qt.AlignLeft | Qt.AlignVCenter, self.pcap_name)
 
         tl_y = self.height() // 2
-        painter.setPen(QPen(QColor(THEME['border']), 2))
-        painter.drawLine(100, tl_y, self.width() - 20, tl_y)
+
+        track = QColor(THEME['accent']); track.setAlpha(90)
+        painter.setPen(QPen(track, 3, Qt.SolidLine, Qt.RoundCap))
+        painter.drawLine(105, tl_y, self.width() - 20, tl_y)
 
         vp = self.visibleRegion().boundingRect()
 
-        # Pre-compute expanded cluster rects so we can hide anything behind them
+        # Pre-compute expanded cluster rects 
         expanded_rects = []
         for c in self.clusters:
             if c.expanded:
@@ -350,10 +362,11 @@ class PCAPTimeline(QWidget):
             elif ev == self.hovered_event:
                 self._draw_hovered_event(painter, ev, tl_y)
             else:
+                # Base dot
                 c = QColor(self._get_event_color(ev.event_type))
                 painter.setBrush(QBrush(c))
-                painter.setPen(QPen(c, 1))
-                painter.drawEllipse(ev.x_pos - 4, tl_y - 4, 8, 8)
+                painter.setPen(QPen(c.darker(150), 1))
+                painter.drawEllipse(ev.x_pos - 5, tl_y - 5, 10, 10)
 
         # Expanded clusters drawn last so they sit on top
         for c in self.clusters:
@@ -375,24 +388,18 @@ class PCAPTimeline(QWidget):
                 color = QColor(THEME['accent']).lighter(130)
                 border = QColor(THEME['accent']); bw = 2
             else:
-                color = QColor(THEME['text_secondary']).darker(150)
-                border = QColor(THEME['border']); bw = 1
+                color = QColor(THEME['text_secondary']).darker(140)
+                border = QColor(THEME['accent']).darker(120); bw = 1
             painter.setBrush(QBrush(color))
             painter.setPen(QPen(border, bw))
-            painter.drawRect(cluster.x_start - 2, tl_y - 8, w + 4, 16)
+            painter.drawRoundedRect(cluster.x_start - 2, tl_y - 9, w + 4, 18, 8, 8)
             painter.setPen(QColor(THEME['text_primary']))
             font = QFont()
-            font.setPointSize(7 if cluster.count < 100 else 6)
+            font.setPointSize(8 if cluster.count < 100 else 7)
             font.setBold(True)
             painter.setFont(font)
-            painter.drawText(QRect(cluster.x_start - 2, tl_y - 6, w + 4, 12),
+            painter.drawText(QRect(cluster.x_start - 2, tl_y - 9, w + 4, 18),
                              Qt.AlignCenter, str(cluster.count))
-            if is_hovered:
-                painter.setPen(QColor(THEME['text_secondary']))
-                font.setBold(False)
-                painter.setFont(font)
-                painter.drawText(QRect(cluster.x_start - 20, tl_y + 12, w + 40, 15),
-                                 Qt.AlignCenter, "Click to expand")
         else:
             self._draw_expanded_cluster(painter, cluster, tl_y, is_hovered)
 
@@ -507,6 +514,11 @@ class TimestampAxis(QWidget):
         painter.setRenderHint(QPainter.Antialiasing)
         painter.fillRect(self.rect(), QColor(THEME['timeline_bg']))
 
+        # Match sidebar labels
+        painter.fillRect(0, 0, 100, self.height(), QColor(THEME['surface']))
+        painter.setPen(QPen(QColor(THEME['border']), 1))
+        painter.drawLine(100, 0, 100, self.height())
+
         font = QFont()
         font.setPointSize(8)
         painter.setFont(font)
@@ -521,31 +533,31 @@ class TimestampAxis(QWidget):
         elif total <= 86400:  interval = 1800; fmt = "%H:%M"
         else:                 interval = 3600; fmt = "%m/%d %H:%M"
 
-        # Only draw visible markers
+        minor_col = QColor(THEME['border']); minor_col.setAlpha(90)
+        painter.setPen(QPen(minor_col, 1))
+        minor = interval / 5
+        cur = self.start_time
+        while cur <= self.end_time:
+            e = (cur - self.start_time).total_seconds()
+            x = 100 + int(e * self.pixels_per_second)
+            if vp.left() - 50 <= x <= vp.right() + 50:
+                painter.drawLine(x, 8, x, 14)
+            cur += timedelta(seconds=minor)
+
+        # Major ticks and labels
         cur = self.start_time
         while cur <= self.end_time:
             e = (cur - self.start_time).total_seconds()
             x = 100 + int(e * self.pixels_per_second)
             if vp.left() - 100 <= x <= vp.right() + 100:
-                painter.setPen(QPen(QColor(THEME['text_primary']), 2))
-                painter.drawLine(x, 5, x, 20)
-                painter.setPen(QColor(THEME['text_primary']))
-                painter.drawText(QRect(x - 50, 20, 100, 18), Qt.AlignCenter, cur.strftime(fmt))
+                painter.setPen(QPen(QColor(THEME['text_secondary']), 2))
+                painter.drawLine(x, 4, x, 18)
+                painter.setPen(QColor(THEME['text_secondary']))
+                painter.drawText(QRect(x - 50, 18, 100, 18), Qt.AlignCenter, cur.strftime(fmt))
             cur += timedelta(seconds=interval)
 
-        # Draw minor ticks
-        minor = interval / 5
-        cur = self.start_time
-        painter.setPen(QPen(QColor(THEME['border']), 1))
-        while cur <= self.end_time:
-            e = (cur - self.start_time).total_seconds()
-            x = 100 + int(e * self.pixels_per_second)
-            if vp.left() - 50 <= x <= vp.right() + 50:
-                painter.drawLine(x, 10, x, 15)
-            cur += timedelta(seconds=minor)
 
-
-# Browser activity lane — shows incognito gaps (red) and normal history (gray) together
+# Browser activity lane
 class IncognitoGapTimeline(QWidget):
     def __init__(self, gap_data, start_time, end_time,
                  normal_events=None, height=120, pixels_per_second=50):
@@ -558,8 +570,8 @@ class IncognitoGapTimeline(QWidget):
         self.pixels_per_second = pixels_per_second
         self.hovered_gap = None
         self.highlighted_domain = None
-        self._dot_positions = []        # gap dots: (x, y, gap_dict)
-        self._normal_dot_positions = [] # normal dots: (x, y, domain)
+        self._dot_positions = []      
+        self._normal_dot_positions = [] 
         self._sessions = []
         self._gap_table_ref = None
 
@@ -571,7 +583,6 @@ class IncognitoGapTimeline(QWidget):
         self._compute_dot_positions()
         self._compute_sessions()
 
-    # Wire up to IncognitoGapWidget so clicking a dot selects the matching table row
     def set_gap_table(self, ref):
         self._gap_table_ref = ref
 
@@ -593,7 +604,7 @@ class IncognitoGapTimeline(QWidget):
             x = 100 + int(elapsed * self.pixels_per_second)
             self._dot_positions.append((x, tl_y, gap))
 
-        # Deduplicate normal events by domain — use first occurrence x position
+        # Deduplicate normal events by domain
         seen_domains = {}
         for ev in self.normal_events:
             if not ev.value or ev.value in seen_domains:
@@ -644,33 +655,31 @@ class IncognitoGapTimeline(QWidget):
         painter.setRenderHint(QPainter.Antialiasing)
         painter.fillRect(self.rect(), QColor(THEME['timeline_bg']))
 
+        # Sidebar label zone matches the PCAP lanes above
+        painter.fillRect(0, 0, 100, self.height(), QColor(THEME['surface']))
+        painter.setPen(QPen(QColor(THEME['border']), 1))
+        painter.drawLine(100, 0, 100, self.height())
+
         # Lane label
         painter.setPen(QColor(THEME['text_primary']))
         font = QFont()
         font.setPointSize(10)
         font.setBold(True)
         painter.setFont(font)
-        painter.drawText(QRect(10, 10, 85, 20), Qt.AlignLeft | Qt.AlignVCenter, "Browser")
+        painter.drawText(QRect(10, 0, 85, self.height()), Qt.AlignLeft | Qt.AlignVCenter, "Browser")
 
         tl_y = self.height() // 2
         vp = self.visibleRegion().boundingRect()
 
-        # Session span bands drawn behind the dots
+        # Session span bands
         for x0, x1, ms in self._sessions:
-            sc = QColor(self._dot_color(ms)); sc.setAlpha(25)
+            sc = QColor(self._dot_color(ms)); sc.setAlpha(35)
             painter.fillRect(x0 - 10, tl_y - 18, (x1 - x0) + 20, 36, sc)
-            bc = QColor(self._dot_color(ms)); bc.setAlpha(70)
-            painter.setPen(QPen(bc, 1, Qt.DashLine))
-            painter.drawRect(x0 - 10, tl_y - 18, (x1 - x0) + 20, 36)
-            font.setPointSize(7); font.setBold(False); font.setItalic(True)
-            painter.setFont(font)
-            painter.setPen(QColor(self._dot_color(ms)))
-            painter.drawText(x0 - 8, tl_y - 22, "possible session")
 
-        painter.setPen(QPen(QColor(THEME['border']), 2))
-        painter.drawLine(100, tl_y, self.width() - 20, tl_y)
+        track = QColor(THEME['accent']); track.setAlpha(90)
+        painter.setPen(QPen(track, 3, Qt.SolidLine, Qt.RoundCap))
+        painter.drawLine(105, tl_y, self.width() - 20, tl_y)
 
-        # Normal history dots — small gray, drawn first so gap dots appear on top
         for x, y, domain in self._normal_dot_positions:
             if x < vp.left() - 50 or x > vp.right() + 50:
                 continue
@@ -678,7 +687,6 @@ class IncognitoGapTimeline(QWidget):
             painter.setPen(QPen(QColor("#2d5c2d"), 1))
             painter.drawEllipse(x - 3, y - 3, 6, 6)
 
-        # Gap dots — larger, red-coded by suspiciousness
         for x, y, gap in self._dot_positions:
             if x < vp.left() - 50 or x > vp.right() + 50:
                 continue
@@ -697,7 +705,7 @@ class IncognitoGapTimeline(QWidget):
                 painter.drawEllipse(x - 6, y - 6, 12, 12)
             else:
                 painter.setBrush(QBrush(QColor(color)))
-                painter.setPen(QPen(QColor(color).darker(120), 1))
+                painter.setPen(QPen(QColor(color).darker(140), 1))
                 painter.drawEllipse(x - 5, y - 5, 10, 10)
 
         if self.hovered_gap:
@@ -880,7 +888,7 @@ class TimelineInfoPanel(QFrame):
         lay.addWidget(row)
 
 
-# Main timeline widget, displays one lane per PCAP file and an optional incognito gap lane
+# Main timeline widget
 class CrossPCAPTimelineWidget(QFrame):
     def __init__(self):
         super().__init__()
@@ -930,7 +938,7 @@ class CrossPCAPTimelineWidget(QFrame):
 
         layout.addLayout(header)
 
-        # Focus bar — shown when a gap row is clicked, hidden in normal view
+        # Focus bar
         self._focus_bar = QWidget()
         self._focus_bar.setFixedHeight(34)
         self._focus_bar.setStyleSheet(f"background-color: {THEME['accent']};")
@@ -998,11 +1006,9 @@ class CrossPCAPTimelineWidget(QFrame):
         self.info_panel.hide()
 
     # Public API
-
     def load_timeline_data(self, timeline_data: dict):
         try:
-            # Reset incognito cache so the fit_to_view rebuild doesn't re-inject
-            # a stale lane from the previous run before load_incognito_gaps fires
+
             self._incognito_gap_data = None
             self._incognito_gap_table = None
             self._clear_lanes()
@@ -1012,7 +1018,6 @@ class CrossPCAPTimelineWidget(QFrame):
                 no_data = QLabel("No events found for selected fields")
                 no_data.setStyleSheet(f"color: {THEME['text_secondary']}; padding: 20px;")
                 self.timeline_layout.addWidget(no_data)
-                self.minimap.hide()
                 return
 
             self.start_time = min(e.timestamp for e in all_events)
@@ -1020,11 +1025,12 @@ class CrossPCAPTimelineWidget(QFrame):
 
             self._perf_label.setText(f"{len(all_events)} events loaded")
 
-            for pcap_name, events in sorted(timeline_data.items()):
+            for idx, (pcap_name, events) in enumerate(sorted(timeline_data.items())):
                 if events:
                     tl = PCAPTimeline(pcap_name, events,
                                       self.start_time, self.end_time,
-                                      pixels_per_second=self.pixels_per_second)
+                                      pixels_per_second=self.pixels_per_second,
+                                      lane_index=idx)
                     self.pcap_timelines.append(tl)
                     self.timeline_layout.addWidget(tl, 1)
 
@@ -1159,21 +1165,25 @@ class CrossPCAPTimelineWidget(QFrame):
         if not lane_gaps:
             lane_gaps = self._incognito_gap_data
 
-        self._sep_label = QLabel("  ▼  Browser Activity  ( ● Incognito gaps   ● Normal history )")
-        self._sep_label.setFixedHeight(28)
+        self._sep_label = QLabel("BROWSER ACTIVITY   ·   incognito gaps  ●   normal history  ●")
+        self._sep_label.setFixedHeight(24)
+        self._sep_label.setAlignment(Qt.AlignVCenter | Qt.AlignLeft)
         self._sep_label.setStyleSheet(f"""
-            background-color: {THEME['accent']};
-            color: white;
-            font-size: 11px;
+            background-color: {THEME['surface']};
+            color: {THEME['text_secondary']};
+            font-size: 10px;
             font-weight: bold;
-            padding-left: 10px;
+            letter-spacing: 1px;
+            padding-left: 12px;
+            border-top: 2px solid {THEME['accent']};
+            border-bottom: 1px solid {THEME['border']};
         """)
 
         self._incognito_lane = IncognitoGapTimeline(
             lane_gaps, lane_start, lane_end,
             normal_events=[ev for ev in (self._normal_events or [])
                            if lane_start <= ev.timestamp <= lane_end],
-            height=160, pixels_per_second=self.pixels_per_second
+            height=110, pixels_per_second=self.pixels_per_second
         )
         if self._incognito_gap_table:
             self._incognito_lane.set_gap_table(self._incognito_gap_table)
@@ -1204,14 +1214,15 @@ class CrossPCAPTimelineWidget(QFrame):
         start = self._focus_window[0] if self._focus_window else self.start_time
         end = self._focus_window[1] if self._focus_window else self.end_time
 
-        for name, evs in sorted(data.items()):
+        for idx, (name, evs) in enumerate(sorted(data.items())):
             if evs:
                 tl = PCAPTimeline(name, evs, start, end,
-                                  pixels_per_second=self.pixels_per_second)
+                                  pixels_per_second=self.pixels_per_second,
+                                  lane_index=idx)
                 if self._focus_window:
                     tl.use_clustering = False
                     tl._create_clusters()
-                    # Compare timestamps — strip tzinfo if mixed aware/naive
+                    # Compare timestamps 
                     def _ts(t):
                         return t.replace(tzinfo=None) if t.tzinfo else t
                     s = _ts(start)

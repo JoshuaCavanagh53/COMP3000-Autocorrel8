@@ -105,22 +105,33 @@ class RegistryLane(QWidget):
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
-        painter.fillRect(self.rect(), QColor(THEME["timeline_bg"]))
+
+        bg = QColor(THEME["timeline_bg"])
+        if self.lane_type == LANE_SNAPSHOT:
+            bg = bg.darker(108)
+        painter.fillRect(self.rect(), bg)
+
+        # Sidebar label zone with divider
+        painter.fillRect(0, 0, LABEL_WIDTH, self.height(), QColor(THEME["surface"]))
+        painter.setPen(QPen(QColor(THEME["border"]), 1))
+        painter.drawLine(LABEL_WIDTH, 0, LABEL_WIDTH, self.height())
 
         tl_y = self.height() // 2
 
         # Lane label
         font = QFont()
-        font.setPointSize(9)
+        font.setPointSize(10)
         font.setBold(True)
         painter.setFont(font)
-        painter.setPen(QColor(THEME["text_secondary"]))
-        label = "Baseline" if self.lane_type == LANE_BASELINE else "Snapshot"
-        painter.drawText(QRect(5, tl_y - 10, LABEL_WIDTH - 10, 20), Qt.AlignVCenter | Qt.AlignLeft, label)
+        painter.setPen(QColor(THEME["text_primary"]))
+        label = "Before" if self.lane_type == LANE_BASELINE else "After"
+        painter.drawText(QRect(10, 0, LABEL_WIDTH - 10, self.height()),
+                         Qt.AlignVCenter | Qt.AlignLeft, label)
 
-        # Timeline bar
-        painter.setPen(QPen(QColor(THEME["border"]), 2))
-        painter.drawLine(LABEL_WIDTH, tl_y, self.width() - 20, tl_y)
+        # Thicker accent-tinted track
+        track = QColor(THEME["accent"]); track.setAlpha(90)
+        painter.setPen(QPen(track, 3, Qt.SolidLine, Qt.RoundCap))
+        painter.drawLine(LABEL_WIDTH + 5, tl_y, self.width() - 20, tl_y)
 
         # Draw dots
         for dot in self.dots:
@@ -142,7 +153,7 @@ class RegistryLane(QWidget):
                 painter.drawEllipse(dot.x - 8, dot.y - 8, 16, 16)
             else:
                 painter.setBrush(QBrush(QColor(color)))
-                painter.setPen(QPen(QColor(color).darker(120), 1))
+                painter.setPen(QPen(QColor(color).darker(140), 1))
                 painter.drawEllipse(dot.x - DOT_RADIUS, dot.y - DOT_RADIUS, DOT_RADIUS * 2, DOT_RADIUS * 2)
 
         # Draw tooltip for hovered dot
@@ -245,6 +256,10 @@ class RegistryKeyAxis(QWidget):
         painter.setRenderHint(QPainter.Antialiasing)
         painter.fillRect(self.rect(), QColor(THEME["timeline_bg"]))
 
+        painter.fillRect(0, 0, LABEL_WIDTH, self.height(), QColor(THEME["surface"]))
+        painter.setPen(QPen(QColor(THEME["border"]), 1))
+        painter.drawLine(LABEL_WIDTH, 0, LABEL_WIDTH, self.height())
+
         font = QFont()
         font.setPointSize(8)
         painter.setFont(font)
@@ -253,7 +268,8 @@ class RegistryKeyAxis(QWidget):
             # Just show the last part of the path
             short_label = key_path.split("\\")[-1]
 
-            painter.setPen(QPen(QColor(THEME["border"]), 1))
+            tick_col = QColor(THEME["border"]); tick_col.setAlpha(120)
+            painter.setPen(QPen(tick_col, 1))
             painter.drawLine(x, 0, x, 8)
 
             painter.setPen(QColor(THEME["text_secondary"]))
@@ -393,19 +409,6 @@ class RegistryTimelineWidget(QFrame):
         total_width = max(self.group_positions.values()) + GROUP_PADDING * 2 + 100 if self.group_positions else 600
         self.lane_container.setMinimumWidth(max(total_width, self.scroll.viewport().width()))
 
-        # Baseline lane separator label
-        baseline_sep = QLabel("  Before (Baseline)")
-        baseline_sep.setFixedHeight(24)
-        baseline_sep.setStyleSheet(f"""
-            background-color: {THEME['surface']};
-            color: {THEME['text_secondary']};
-            font-size: 10px;
-            font-weight: bold;
-            padding-left: 8px;
-            border-bottom: 1px solid {THEME['border']};
-        """)
-        self.lane_layout.addWidget(baseline_sep)
-
         # Baseline lane
         self.baseline_lane = RegistryLane(LANE_BASELINE, self.entries, self.key_groups, self.group_positions)
         if self.registry_table_ref:
@@ -416,19 +419,6 @@ class RegistryTimelineWidget(QFrame):
         axis = RegistryKeyAxis(self.key_groups, self.group_positions)
         self.lane_layout.addWidget(axis)
 
-        # Snapshot lane separator label
-        snapshot_sep = QLabel("  After (Snapshot)")
-        snapshot_sep.setFixedHeight(24)
-        snapshot_sep.setStyleSheet(f"""
-            background-color: {THEME['surface']};
-            color: {THEME['text_secondary']};
-            font-size: 10px;
-            font-weight: bold;
-            padding-left: 8px;
-            border-bottom: 1px solid {THEME['border']};
-        """)
-        self.lane_layout.addWidget(snapshot_sep)
-
         # Snapshot lane
         self.snapshot_lane = RegistryLane(LANE_SNAPSHOT, self.entries, self.key_groups, self.group_positions)
         if self.registry_table_ref:
@@ -436,13 +426,12 @@ class RegistryTimelineWidget(QFrame):
         self.lane_layout.addWidget(self.snapshot_lane, 1)
 
     def _compute_group_positions(self):
-        # Work out how wide each group needs to be based on max dots per group
+
         self.group_positions = {}
         x = LABEL_WIDTH + GROUP_PADDING
 
         for key_path in self.key_groups:
             self.group_positions[key_path] = x
-            # Count max dots in either lane for this key path
             baseline_count = sum(
                 1 for e in self.entries
                 if e.get("key_path") == key_path and e.get("change_type") in ("deleted", "modified")
