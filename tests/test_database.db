@@ -1,0 +1,219 @@
+from datetime import datetime
+from autocorrel8Main.app.database import (delete_packets, get_all_evidence_hashes, store_evidence_hash, get_evidence_hash, 
+                                          create_case, get_case, get_all_cases, update_case_notes, 
+                                          save_packets, get_packets, get_packet_filenames, delete_packets, get_latest_run,
+                                            get_runs_for_case, save_run, get_gaps_for_run, get_bookmarks_for_case, add_bookmark,
+                                            update_bookmark_note, toggle_bookmark, remove_bookmark, add_registry_bookmark, get_registry_bookmarks_for_case,
+                                            update_registry_bookmark_note, toggle_registry_bookmark
+
+)
+# Cases
+
+def test_create_case_returns_integer_id(temp_db):
+   
+    case_id = create_case("My Case", "/cases/mycase", "Josh")
+    assert isinstance(case_id, int) and case_id > 0
+
+
+def test_create_case_duplicate_path_returns_existing_id(temp_db):
+
+    id1 = create_case("My Case", "/cases/mycase", "Josh")
+    id2 = create_case("Different Name", "/cases/mycase", "Someone Else")
+    assert id1 == id2
+
+
+def test_get_case_returns_full_row(temp_db, sample_case):
+    
+    case = get_case(sample_case)
+    assert case["name"] == "Test Case"
+    assert case["path"] == "/tmp/case1"
+    assert case["investigator"] == "Josh"
+
+
+def test_get_case_returns_none_when_missing(temp_db):
+
+    assert get_case(999) is None
+
+
+def test_get_all_cases_empty(temp_db):
+
+    assert get_all_cases() == []
+
+
+def test_get_all_cases_returns_every_case(temp_db):
+   
+    create_case("A", "/a", "Josh")
+    create_case("B", "/b", "Josh")
+    assert len(get_all_cases()) == 2
+
+
+def test_update_case_notes(temp_db, sample_case):
+
+    update_case_notes(sample_case, "Suspect accessed site X at 14:02")
+    assert get_case(sample_case)["notes"] == "Suspect accessed site X at 14:02"
+
+
+# Packets
+
+def test_save_and_retrieve_packets(temp_db, sample_case):
+   
+    data = [{"src": "1.1.1.1", "dst": "2.2.2.2"}, {"src": "3.3.3.3", "dst": "4.4.4.4"}]
+    save_packets(sample_case, "capture.pcap", data)
+    assert get_packets(sample_case, "capture.pcap") == data
+
+
+def test_save_packets_upserts_on_same_filename(temp_db, sample_case):
+    
+    save_packets(sample_case, "capture.pcap", [{"v": 1}])
+    save_packets(sample_case, "capture.pcap", [{"v": 2}])
+    assert get_packets(sample_case, "capture.pcap") == [{"v": 2}]
+
+
+def test_get_packets_missing_returns_empty_list(temp_db, sample_case):
+ 
+    assert get_packets(sample_case, "nonexistent.pcap") == []
+
+
+def test_get_packet_filenames(temp_db, sample_case):
+    
+    save_packets(sample_case, "a.pcap", [])
+    save_packets(sample_case, "b.pcap", [])
+    assert set(get_packet_filenames(sample_case)) == {"a.pcap", "b.pcap"}
+
+
+def test_delete_packets_removes_file(temp_db, sample_case):
+    
+    save_packets(sample_case, "a.pcap", [{"v": 1}])
+    delete_packets(sample_case, "a.pcap")
+    assert get_packets(sample_case, "a.pcap") == []
+
+
+# Runs and gaps
+
+def test_save_run_persists_run_and_gaps(temp_db, sample_case):
+     
+    gaps = [{
+        "domain": "example.com",
+        "category": "social",
+        "count": 3,
+        "first_seen": datetime(2025, 1, 1, 12, 0, 0),
+        "last_seen": datetime(2025, 1, 1, 12, 5, 0),
+        "duration": "5m",
+    }]
+    run_id = save_run(sample_case, ["capture.pcap"], gaps)
+
+    runs = get_runs_for_case(sample_case)
+    assert len(runs) == 1
+    assert runs[0]["id"] == run_id
+    assert runs[0]["gap_count"] == 1
+
+    stored_gaps = get_gaps_for_run(run_id)
+    assert len(stored_gaps) == 1
+    assert stored_gaps[0]["domain"] == "example.com"
+    assert stored_gaps[0]["category"] == "social"
+    assert stored_gaps[0]["count"] == 3
+
+
+def test_get_latest_run_returns_saved_run(temp_db, sample_case):
+ 
+    run_id = save_run(sample_case, ["capture.pcap"], [])
+    assert get_latest_run(sample_case)["id"] == run_id
+
+
+def test_get_latest_run_returns_none_when_no_runs(temp_db, sample_case):
+    
+    assert get_latest_run(sample_case) is None
+
+
+# Domain bookmarks
+
+def test_add_bookmark_then_retrieve(temp_db, sample_case):
+ 
+    add_bookmark(sample_case, "example.com")
+    bms = get_bookmarks_for_case(sample_case)
+    assert bms == {"example.com": ""}
+
+
+def test_add_bookmark_is_idempotent(temp_db, sample_case):
+  
+    add_bookmark(sample_case, "example.com")
+    add_bookmark(sample_case, "example.com")
+    assert len(get_bookmarks_for_case(sample_case)) == 1
+
+
+def test_remove_bookmark(temp_db, sample_case):
+
+    add_bookmark(sample_case, "example.com")
+    remove_bookmark(sample_case, "example.com")
+    assert get_bookmarks_for_case(sample_case) == {}
+
+
+def test_update_bookmark_note(temp_db, sample_case):
+ 
+    add_bookmark(sample_case, "example.com")
+    update_bookmark_note(sample_case, "example.com", "Suspicious activity at 14:02")
+    assert get_bookmarks_for_case(sample_case)["example.com"] == "Suspicious activity at 14:02"
+
+
+def test_toggle_bookmark_on_and_off(temp_db, sample_case):
+
+    toggle_bookmark(sample_case, "example.com", True)
+    assert "example.com" in get_bookmarks_for_case(sample_case)
+    toggle_bookmark(sample_case, "example.com", False)
+    assert "example.com" not in get_bookmarks_for_case(sample_case)
+
+
+# Registry bookmarks
+
+def test_add_registry_bookmark(temp_db, sample_case):
+
+    add_registry_bookmark(sample_case, "HKLM\\Software\\Test", "Setting")
+    assert ("HKLM\\Software\\Test", "Setting") in get_registry_bookmarks_for_case(sample_case)
+
+
+def test_update_registry_bookmark_note(temp_db, sample_case):
+     
+    add_registry_bookmark(sample_case, "HKLM\\Software\\Test", "Setting")
+    update_registry_bookmark_note(
+        sample_case, "HKLM\\Software\\Test", "Setting", "Persistence indicator"
+    )
+    bms = get_registry_bookmarks_for_case(sample_case)
+    assert bms[("HKLM\\Software\\Test", "Setting")] == "Persistence indicator"
+
+
+def test_toggle_registry_bookmark(temp_db, sample_case):
+   
+    toggle_registry_bookmark(sample_case, "HKLM\\Software\\Test", "Setting", True)
+    assert ("HKLM\\Software\\Test", "Setting") in get_registry_bookmarks_for_case(sample_case)
+    toggle_registry_bookmark(sample_case, "HKLM\\Software\\Test", "Setting", False)
+    assert ("HKLM\\Software\\Test", "Setting") not in get_registry_bookmarks_for_case(sample_case)
+
+
+# Evidence hashes
+
+def test_store_and_get_evidence_hash(temp_db, sample_case):
+   
+    store_evidence_hash(sample_case, "evidence.bin", "abc123", "registry")
+    assert get_evidence_hash(sample_case, "evidence.bin") == "abc123"
+
+
+def test_get_evidence_hash_missing_returns_none(temp_db, sample_case):
+
+    assert get_evidence_hash(sample_case, "missing.bin") is None
+
+
+def test_store_evidence_hash_upserts(temp_db, sample_case):
+  
+    store_evidence_hash(sample_case, "f.bin", "hash_v1", "registry")
+    store_evidence_hash(sample_case, "f.bin", "hash_v2", "registry")
+    assert get_evidence_hash(sample_case, "f.bin") == "hash_v2"
+
+
+def test_get_all_evidence_hashes(temp_db, sample_case):
+
+    store_evidence_hash(sample_case, "a.bin", "hash_a", "registry")
+    store_evidence_hash(sample_case, "b.bin", "hash_b", "pcap")
+    hashes = get_all_evidence_hashes(sample_case)
+    assert len(hashes) == 2
+    filenames = {h["filename"] for h in hashes}
+    assert filenames == {"a.bin", "b.bin"}

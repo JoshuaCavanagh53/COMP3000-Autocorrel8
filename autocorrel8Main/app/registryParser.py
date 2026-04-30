@@ -2,7 +2,8 @@ import json
 import os
 import csv
 import re
-import hashlib
+from hashing import sha256_file
+
 
 
 KEY_CATEGORIES = {
@@ -58,12 +59,12 @@ class RegistryParser:
     # File loading 
     def load_file(self, path: str, case_id: int = None) -> dict:
         # Hash the raw file before parsing
-        self.last_hash = self._hash_file(path)
+        self.last_hash = sha256_file(path)
         self.last_filename = os.path.basename(path)
 
         # Store or verify hash 
         if case_id is not None:
-            from database import store_evidence_hash, get_evidence_hash
+            from .database import store_evidence_hash, get_evidence_hash
             stored = get_evidence_hash(case_id, self.last_filename)
             if stored is None:
                 # First time seeing this file
@@ -86,13 +87,6 @@ class RegistryParser:
         if ext == '.reg':
             return self._load_reg(path)
         raise ValueError(f"Unsupported format: {ext} — use .reg, .csv, or .json")
-
-    def _hash_file(self, path: str) -> str:
-        sha256 = hashlib.sha256()
-        with open(path, 'rb') as f:
-            for chunk in iter(lambda: f.read(8192), b''):
-                sha256.update(chunk)
-        return sha256.hexdigest()
 
     def _load_json(self, path: str) -> dict:
         with open(path, 'r') as f:
@@ -261,8 +255,9 @@ class RegistryParser:
 
     def _categorise_key(self, key_path: str) -> str:
         # Match key path against known categories, return first match
-        for pattern, label in KEY_CATEGORIES.items():
-            if pattern.lower() in key_path.lower():
+        path_lower = key_path.lower()
+        for pattern, label in sorted(KEY_CATEGORIES.items(), key=lambda kv: -len(kv[0])):
+            if pattern.lower() in path_lower:
                 return label
         return 'Other'
 
