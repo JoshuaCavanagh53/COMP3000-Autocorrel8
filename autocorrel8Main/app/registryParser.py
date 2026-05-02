@@ -64,7 +64,7 @@ class RegistryParser:
 
         # Store or verify hash 
         if case_id is not None:
-            from .database import store_evidence_hash, get_evidence_hash
+            from database import store_evidence_hash, get_evidence_hash
             stored = get_evidence_hash(case_id, self.last_filename)
             if stored is None:
                 # First time seeing this file

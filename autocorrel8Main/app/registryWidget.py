@@ -18,22 +18,24 @@ from registryParser import RegistryParser
 
 
 
-_TAB_ALL = 0
-_TAB_ADDED = 1
-_TAB_MODIFIED = 2
-_TAB_DELETED = 3
+_TAB_ALL        = 0
+_TAB_ADDED      = 1
+_TAB_MODIFIED   = 2
+_TAB_DELETED    = 3
+_TAB_BOOKMARKED = 4          # ← new
 
-TYPE_ADDED = 'added'
+TYPE_ADDED    = 'added'
 TYPE_MODIFIED = 'modified'
-TYPE_DELETED = 'deleted'
+TYPE_DELETED  = 'deleted'
 
-_TINT_ADDED = QColor("#131f14")
+_TINT_ADDED    = QColor("#131f14")
 _TINT_MODIFIED = QColor("#13141f")
-_TINT_DELETED = QColor("#251515")
+_TINT_DELETED  = QColor("#251515")
+_TINT_BOOKMARK = QColor("#1e1a09")
 
-_BADGE_ADDED = "#27ae60"
+_BADGE_ADDED    = "#27ae60"
 _BADGE_MODIFIED = "#7C3AED"
-_BADGE_DELETED = "#c0392b"
+_BADGE_DELETED  = "#c0392b"
 
 
 class _TabBar(QWidget):
@@ -70,10 +72,11 @@ class _TabBar(QWidget):
         self._group.setExclusive(True)
 
         for label, tab_id in [
-            ("All Changes", _TAB_ALL),
-            ("🟢  Added", _TAB_ADDED),
-            ("🔵  Modified", _TAB_MODIFIED),
-            ("🔴  Deleted", _TAB_DELETED),
+            ("All Changes",   _TAB_ALL),
+            ("🟢  Added",     _TAB_ADDED),
+            ("🔵  Modified",  _TAB_MODIFIED),
+            ("🔴  Deleted",   _TAB_DELETED),
+            ("★  Bookmarked", _TAB_BOOKMARKED),
         ]:
             btn = QPushButton(label)
             btn.setCheckable(True)
@@ -86,19 +89,25 @@ class _TabBar(QWidget):
         self._group.idClicked.connect(self.tabChanged)
         layout.addStretch()
 
+    def update_bookmark_count(self, count: int):
+        """Update the Bookmarked tab label to show current count."""
+        btn = self._group.button(_TAB_BOOKMARKED)
+        if btn:
+            btn.setText(f"★  Bookmarked ({count})" if count else "★  Bookmarked")
+
 
 class RegistryWidget(QFrame):
 
     entrySelected = pyqtSignal(dict)
 
-    _COLS = ["Change", "Key Path", "Value Name", "Category", "Old Data", "New Data", "★"]
+    _COLS      = ["Change", "Key Path", "Value Name", "Category", "Old Data", "New Data", "★"]
     _COL_CHANGE = 0
-    _COL_KEY = 1
-    _COL_VALUE = 2
-    _COL_CAT = 3
-    _COL_OLD = 4
-    _COL_NEW = 5
-    _COL_BM = 6
+    _COL_KEY    = 1
+    _COL_VALUE  = 2
+    _COL_CAT    = 3
+    _COL_OLD    = 4
+    _COL_NEW    = 5
+    _COL_BM     = 6
 
     def __init__(self):
         super().__init__()
@@ -106,7 +115,7 @@ class RegistryWidget(QFrame):
         self._all_entries: list[dict] = []
         self._baseline_path = None
         self._snapshot_path = None
-        self._bookmarks: dict[tuple, str] = {}  
+        self._bookmarks: dict[tuple, str] = {}
         self.case_id = None
 
         self.setStyleSheet(f"""
@@ -138,9 +147,9 @@ class RegistryWidget(QFrame):
         legend = QHBoxLayout()
         legend.setSpacing(12)
         for colour, text in [
-            (_BADGE_ADDED, "Added"),
+            (_BADGE_ADDED,    "Added"),
             (_BADGE_MODIFIED, "Modified"),
-            (_BADGE_DELETED, "Deleted"),
+            (_BADGE_DELETED,  "Deleted"),
         ]:
             dot = QLabel("●")
             dot.setStyleSheet(f"color: {colour}; font-size: 14px;")
@@ -157,7 +166,7 @@ class RegistryWidget(QFrame):
 
         self._baseline_btn = QPushButton("📂  Load Baseline")
         self._snapshot_btn = QPushButton("📂  Load Snapshot")
-        self._compare_btn = QPushButton("Compare")
+        self._compare_btn  = QPushButton("Compare")
         self._compare_btn.setEnabled(False)
 
         btn_style = f"""
@@ -223,6 +232,15 @@ class RegistryWidget(QFrame):
         self._tabs.tabChanged.connect(self._apply_tab)
         root.addWidget(self._tabs)
 
+        # Bookmarked-tab empty-state label (hidden by default)
+        self._bookmark_empty = QLabel("No bookmarks yet — click ☆ on any row to bookmark it.")
+        self._bookmark_empty.setAlignment(Qt.AlignCenter)
+        self._bookmark_empty.setStyleSheet(
+            f"color: {THEME['text_secondary']}; font-size: 12px; padding: 10px;"
+        )
+        self._bookmark_empty.hide()
+        root.addWidget(self._bookmark_empty)
+
         # Search bar
         self._search = QLineEdit()
         self._search.setPlaceholderText("Filter by key path or value name…")
@@ -273,13 +291,12 @@ class RegistryWidget(QFrame):
         """)
 
         self._table.setColumnWidth(self._COL_CHANGE, 80)
-        self._table.setColumnWidth(self._COL_VALUE, 120)
-        self._table.setColumnWidth(self._COL_CAT, 160)
-        self._table.setColumnWidth(self._COL_OLD, 130)
-        self._table.setColumnWidth(self._COL_BM, 35)
+        self._table.setColumnWidth(self._COL_VALUE,  120)
+        self._table.setColumnWidth(self._COL_CAT,    160)
+        self._table.setColumnWidth(self._COL_OLD,    130)
+        self._table.setColumnWidth(self._COL_BM,     35)
         self._table.horizontalHeader().setStretchLastSection(False)
 
-   
         header = self._table.horizontalHeader()
         header.setSectionResizeMode(self._COL_KEY, QHeaderView.Stretch)
         header.setSectionResizeMode(self._COL_NEW, QHeaderView.Stretch)
@@ -289,32 +306,32 @@ class RegistryWidget(QFrame):
         self._table.itemSelectionChanged.connect(self._on_row_selected)
         root.addWidget(self._table)
 
-        # Notes panel - shown when a bookmarked row is selected
+        # Notes panel
         self._notes_panel = self._build_notes_panel()
         self._notes_panel.hide()
         root.addWidget(self._notes_panel)
 
         self._show_placeholder()
 
-    # Public API
+    # ── Public API ──────────────────────────────────────────────────────────────
 
     def load_entries(self, entries: list[dict]):
         self._all_entries = entries or []
         n_added = sum(1 for e in entries if e.get('change_type') == TYPE_ADDED)
-        n_mod = sum(1 for e in entries if e.get('change_type') == TYPE_MODIFIED)
-        n_del = sum(1 for e in entries if e.get('change_type') == TYPE_DELETED)
+        n_mod   = sum(1 for e in entries if e.get('change_type') == TYPE_MODIFIED)
+        n_del   = sum(1 for e in entries if e.get('change_type') == TYPE_DELETED)
         self._count_label.setText(
             f"{n_added} added  ·  {n_mod} modified  ·  {n_del} deleted"
         )
-  
         self._apply_tab(self._tabs._group.checkedId())
-
-    # Internal
 
     def set_case_id(self, case_id: int):
         self.case_id = case_id
         self._bookmarks = get_registry_bookmarks_for_case(case_id)
+        self._sync_bookmark_tab_label()
         self._apply_tab(self._tabs._group.checkedId())
+
+    # ── Internal ────────────────────────────────────────────────────────────────
 
     def _load_baseline(self):
         path, _ = QFileDialog.getOpenFileName(
@@ -345,51 +362,65 @@ class RegistryWidget(QFrame):
 
     def _run_comparison(self):
         try:
-            parser = RegistryParser()
+            parser  = RegistryParser()
             results = parser.compare(
                 self._baseline_path,
                 self._snapshot_path,
                 case_id=self.case_id
             )
-
             self.load_entries(results)
 
             b_status = self._hash_badge(parser.baseline_hash_status)
             s_status = self._hash_badge(parser.snapshot_hash_status)
-            n_added = sum(1 for e in results if e.get('change_type') == 'added')
-            n_mod = sum(1 for e in results if e.get('change_type') == 'modified')
-            n_del = sum(1 for e in results if e.get('change_type') == 'deleted')
+            n_added  = sum(1 for e in results if e.get('change_type') == 'added')
+            n_mod    = sum(1 for e in results if e.get('change_type') == 'modified')
+            n_del    = sum(1 for e in results if e.get('change_type') == 'deleted')
             self._count_label.setText(
-                f"{n_added} added  ·  {n_mod} modified  ·  {n_del} deleted  |  Baseline: {b_status}  Snapshot: {s_status}"
+                f"{n_added} added  ·  {n_mod} modified  ·  {n_del} deleted"
+                f"  |  Baseline: {b_status}  Snapshot: {s_status}"
             )
-
         except Exception as e:
             self._count_label.setText(f"Error: {e}")
 
     def _hash_badge(self, status: str) -> str:
         return {
-            'new': '🔵 Hashed',
-            'verified': '🟢 Verified',
-            'mismatch': '🔴 HASH MISMATCH',
+            'new':       '🔵 Hashed',
+            'verified':  '🟢 Verified',
+            'mismatch':  '🔴 HASH MISMATCH',
             'unchecked': '⚪ Unchecked',
         }.get(status, status)
 
     def _apply_tab(self, tab_id: int):
+        # Show/hide the bookmark empty-state hint
+        self._bookmark_empty.hide()
+
         if tab_id == _TAB_ALL:
             entries = self._all_entries
         elif tab_id == _TAB_ADDED:
             entries = [e for e in self._all_entries if e.get('change_type') == TYPE_ADDED]
         elif tab_id == _TAB_MODIFIED:
             entries = [e for e in self._all_entries if e.get('change_type') == TYPE_MODIFIED]
-        else:
+        elif tab_id == _TAB_DELETED:
             entries = [e for e in self._all_entries if e.get('change_type') == TYPE_DELETED]
+        elif tab_id == _TAB_BOOKMARKED:
+            entries = [
+                e for e in self._all_entries
+                if (e.get('key_path', ''), e.get('value_name', '')) in self._bookmarks
+            ]
+            # Show the empty-state hint instead of the generic placeholder
+            if not entries:
+                self._bookmark_empty.show()
+        else:
+            entries = self._all_entries
 
         query = self._search.text().strip().lower()
         if query:
-            entries = [e for e in entries
-                       if query in e.get('key_path', '').lower()
-                       or query in e.get('value_name', '').lower()
-                       or query in e.get('category', '').lower()]
+            entries = [
+                e for e in entries
+                if query in e.get('key_path',    '').lower()
+                or query in e.get('value_name',  '').lower()
+                or query in e.get('category',    '').lower()
+            ]
 
         self._populate(entries)
 
@@ -406,22 +437,26 @@ class RegistryWidget(QFrame):
         for row, entry in enumerate(entries):
             change = entry.get('change_type', '')
             colour = {
-                TYPE_ADDED: _BADGE_ADDED,
+                TYPE_ADDED:    _BADGE_ADDED,
                 TYPE_MODIFIED: _BADGE_MODIFIED,
-                TYPE_DELETED: _BADGE_DELETED,
+                TYPE_DELETED:  _BADGE_DELETED,
             }.get(change, THEME['text_secondary'])
             tint = {
-                TYPE_ADDED: _TINT_ADDED,
+                TYPE_ADDED:    _TINT_ADDED,
                 TYPE_MODIFIED: _TINT_MODIFIED,
-                TYPE_DELETED: _TINT_DELETED,
+                TYPE_DELETED:  _TINT_DELETED,
             }.get(change, QColor(THEME['surface']))
 
-            bm_key = (entry.get('key_path', ''), entry.get('value_name', ''))
+            bm_key       = (entry.get('key_path', ''), entry.get('value_name', ''))
             is_bookmarked = bm_key in self._bookmarks
             if is_bookmarked:
-                tint = QColor("#1e1a09")
+                tint = _TINT_BOOKMARK
 
-            label = {"added": "⬤  Added", "modified": "⬤  Modified", "deleted": "⬤  Deleted"}.get(change, change)
+            label = {
+                "added":    "⬤  Added",
+                "modified": "⬤  Modified",
+                "deleted":  "⬤  Deleted",
+            }.get(change, change)
             change_item = QTableWidgetItem(label)
             change_item.setForeground(QColor(colour))
             change_item.setTextAlignment(Qt.AlignCenter | Qt.AlignVCenter)
@@ -432,9 +467,9 @@ class RegistryWidget(QFrame):
             self._table.setItem(row, self._COL_KEY, key_item)
 
             self._table.setItem(row, self._COL_VALUE, QTableWidgetItem(entry.get('value_name', '')))
-            self._table.setItem(row, self._COL_CAT, QTableWidgetItem(entry.get('category', 'Other')))
-            self._table.setItem(row, self._COL_OLD, QTableWidgetItem(str(entry.get('old_data', ''))))
-            self._table.setItem(row, self._COL_NEW, QTableWidgetItem(str(entry.get('new_data', ''))))
+            self._table.setItem(row, self._COL_CAT,   QTableWidgetItem(entry.get('category', 'Other')))
+            self._table.setItem(row, self._COL_OLD,   QTableWidgetItem(str(entry.get('old_data', ''))))
+            self._table.setItem(row, self._COL_NEW,   QTableWidgetItem(str(entry.get('new_data', ''))))
 
             # Bookmark button
             bm_btn = QPushButton("★" if is_bookmarked else "☆")
@@ -442,7 +477,7 @@ class RegistryWidget(QFrame):
             bm_btn.setCursor(Qt.PointingHandCursor)
             bm_btn.setStyleSheet(self._bm_style(is_bookmarked))
             bm_btn.clicked.connect(lambda _, e=entry: self._toggle_bookmark(e))
-            cell = QWidget()
+            cell        = QWidget()
             cell_layout = QHBoxLayout(cell)
             cell_layout.addWidget(bm_btn)
             cell_layout.setAlignment(Qt.AlignCenter)
@@ -466,7 +501,12 @@ class RegistryWidget(QFrame):
             bookmarked = True
         if self.case_id is not None:
             toggle_registry_bookmark(self.case_id, key[0], key[1], bookmarked)
+        self._sync_bookmark_tab_label()
         self._apply_tab(self._tabs._group.checkedId())
+
+    def _sync_bookmark_tab_label(self):
+        """Keep the Bookmarked tab badge count up to date."""
+        self._tabs.update_bookmark_count(len(self._bookmarks))
 
     def _save_note(self, key_path: str, value_name: str, note: str):
         key = (key_path, value_name)
@@ -476,7 +516,11 @@ class RegistryWidget(QFrame):
 
     def _show_placeholder(self):
         self._table.setRowCount(1)
-        msg = "Load a baseline and snapshot, then click Compare" if not self._all_entries else "No entries match the current filter"
+        msg = (
+            "Load a baseline and snapshot, then click Compare"
+            if not self._all_entries
+            else "No entries match the current filter"
+        )
         placeholder = QTableWidgetItem(msg)
         placeholder.setTextAlignment(Qt.AlignCenter)
         placeholder.setForeground(QColor(THEME['text_secondary']))
@@ -497,7 +541,6 @@ class RegistryWidget(QFrame):
 
         self.entrySelected.emit(entry)
 
-        # Show notes panel for bookmarked rows
         key = (entry.get('key_path', ''), entry.get('value_name', ''))
         if key in self._bookmarks:
             self._notes_label.setText(f"Notes — {entry.get('value_name', '')}")
@@ -526,7 +569,9 @@ class RegistryWidget(QFrame):
 
         header = QHBoxLayout()
         self._notes_label = QLabel("Notes")
-        self._notes_label.setStyleSheet(f"color: {THEME['text_secondary']}; font-size: 11px; font-weight: bold;")
+        self._notes_label.setStyleSheet(
+            f"color: {THEME['text_secondary']}; font-size: 11px; font-weight: bold;"
+        )
         header.addWidget(self._notes_label)
         header.addStretch()
         self._notes_saved_indicator = QLabel("")
@@ -546,8 +591,8 @@ class RegistryWidget(QFrame):
                 padding: 4px;
             }}
         """)
-        self._notes_current_key = None
-        self._notes_save_timer = QTimer()
+        self._notes_current_key  = None
+        self._notes_save_timer   = QTimer()
         self._notes_save_timer.setSingleShot(True)
         self._notes_save_timer.timeout.connect(self._flush_note)
         self._notes_editor.textChanged.connect(self._on_note_changed)

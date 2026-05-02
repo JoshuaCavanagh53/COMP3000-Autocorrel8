@@ -7,7 +7,7 @@ from autocorrel8Main.app.browserLogParser import BrowserLogParser
 from autocorrel8Main.app.correlationEngine import CorrelationEngine, GapDetector, TimelineEvent
 
 
-# ── Domain Extraction ─────────────────────────────────────────────────────────
+# Domain Extraction 
 
 @pytest.mark.parametrize("url, expected", [
     ("https://www.example.com/path?q=1", "www.example.com"),
@@ -21,12 +21,12 @@ def test_extract_domain(url, expected):
 
 
 @pytest.mark.parametrize("domain, expected", [
-    ("www.example.com", "example.com"),          # strips www
-    ("sub.example.com", "example.com"),           # strips subdomain
-    ("example.com", "example.com"),               # already main
-    ("shop.example.co.uk", "example.co.uk"),      # multi-part TLD
-    ("host.local", None),                         # .local skipped
-    ("", None),                                   # empty returns None
+    ("www.example.com", "example.com"),          
+    ("sub.example.com", "example.com"),          
+    ("example.com", "example.com"),              
+    ("shop.example.co.uk", "example.co.uk"),     
+    ("host.local", None),                        
+    ("", None),                                  
 ])
 def test_extract_main_domain(domain, expected):
     assert GapDetector()._extract_main_domain(domain) == expected
@@ -37,7 +37,7 @@ def test_extract_main_domain_www_only():
     assert GapDetector()._extract_main_domain("www.bbc.co.uk") == "bbc.co.uk"
 
 
-# ── Timestamp Normalisation ───────────────────────────────────────────────────
+# Timestamp Normalisation 
 
 def test_chrome_time_to_datetime_unix_epoch():
     # Chrome timestamp for 1970-01-01 00:00:00 UTC
@@ -76,7 +76,7 @@ def test_parse_timestamp_none_returns_none():
     assert CorrelationEngine()._parse_timestamp(None) is None
 
 
-# ── Incognito Gap Detection ───────────────────────────────────────────────────
+# Incognito Gap Detection
 
 def _make_event(domain, timestamp, event_type="domain", pcap="capture.pcap"):
     return TimelineEvent(
@@ -106,7 +106,7 @@ def test_find_gaps_suppresses_matched_domain():
 
 def test_find_gaps_respects_time_window():
     t_pcap = datetime(2025, 1, 1, 12, 0, 0)
-    # Browser entry 5s later — within default 10s window
+    # Browser entry 5s later 
     t_browser = datetime(2025, 1, 1, 12, 0, 5)
     pcap_events = [_make_event("example.com", t_pcap)]
     browser_events = [_make_event("example.com", t_browser)]
@@ -116,7 +116,7 @@ def test_find_gaps_respects_time_window():
 
 def test_find_gaps_outside_time_window_is_flagged():
     t_pcap = datetime(2025, 1, 1, 12, 0, 0)
-    # Browser entry 60s later — outside 10s window
+    # Browser entry 60s later
     t_browser = datetime(2025, 1, 1, 12, 1, 0)
     pcap_events = [_make_event("example.com", t_pcap)]
     browser_events = [_make_event("example.com", t_browser)]
@@ -159,7 +159,7 @@ def test_find_gaps_grouped_count_is_correct():
     assert grouped[0]["count"] == 3
 
 
-# ── Browser SQLite Parsing ────────────────────────────────────────────────────
+# Browser SQLite Parsing 
 
 def _make_chrome_db(tmp_path, rows):
     db = tmp_path / "History"
