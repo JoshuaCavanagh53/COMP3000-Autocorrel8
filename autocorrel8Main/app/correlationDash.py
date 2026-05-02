@@ -1,7 +1,7 @@
 import os
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QLabel,
-    QPushButton, QVBoxLayout, QHBoxLayout, QFrame, QStackedWidget, QButtonGroup
+    QPushButton, QVBoxLayout, QHBoxLayout, QFrame, QStackedWidget, QButtonGroup, QSplitter
 )
 from PyQt5.QtCore import Qt
 import sys
@@ -21,68 +21,53 @@ from registryTimeline import RegistryTimelineWidget
 class CorrelationDashboard(QMainWindow):
     def __init__(self, path: str):
         super().__init__()
-
+ 
         self.path = path
-
+ 
         # Init DB and register/retrieve this case
         init_db()
         self.case_id = create_case(os.path.basename(path), path)
         self.current_run_id = None
-
+ 
         self.setWindowTitle("AutoCorrel8 – Incognito Analysis")
         self.setGeometry(100, 100, 1920, 1080)
         self.showMaximized()
-
+ 
         # Internal caches to avoid re-parsing data during iterative analysis
         self._packet_cache = {}
         self._last_timeline_data = None
         self._cached_browser_events = None
         self._cached_gaps = None
-
+ 
         # Main layout
         central = QWidget()
         self.setCentralWidget(central)
-
+ 
         root = QVBoxLayout(central)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
-
+ 
         # Nav bar
         nav = TopNavBar()
         nav.setFixedHeight(50)
         root.addWidget(nav)
-
+ 
         # Content area
         content = QWidget()
         content.setStyleSheet(f"background-color: {THEME['background']};")
         content_layout = QVBoxLayout(content)
         content_layout.setContentsMargins(0, 0, 0, 0)
         content_layout.setSpacing(0)
-
-        # Top section with left panel and right panel
-        top_section = QHBoxLayout()
-        top_section.setSpacing(0)
-        top_section.setContentsMargins(0, 0, 0, 0)
-
-        # Left panel
-        self.left_panel = QWidget()
-        self.left_panel.setMaximumWidth(480)
-        left_layout = QVBoxLayout(self.left_panel)
-        left_layout.setContentsMargins(10, 10, 10, 10)
-        left_layout.setSpacing(8)
-
+ 
         # Correlation engine
         self.correlation_engine = CorrelationEngine()
-
-        top_section.addWidget(self.left_panel)
-
-        # Right panel
-        right_panel = QWidget()
-        right_panel.setMinimumWidth(550)
-        right_layout = QVBoxLayout(right_panel)
+ 
+        top_panel = QWidget()
+        top_panel.setMinimumWidth(550)
+        right_layout = QVBoxLayout(top_panel)
         right_layout.setContentsMargins(0, 0, 0, 0)
         right_layout.setSpacing(0)
-
+ 
         # Panel tab bar
         panel_tab_bar = QWidget()
         panel_tab_bar.setFixedHeight(38)
@@ -95,7 +80,7 @@ class CorrelationDashboard(QMainWindow):
         panel_tab_layout = QHBoxLayout(panel_tab_bar)
         panel_tab_layout.setContentsMargins(8, 4, 8, 0)
         panel_tab_layout.setSpacing(2)
-
+ 
         tab_style = f"""
             QPushButton {{
                 background-color: transparent;
@@ -114,23 +99,23 @@ class CorrelationDashboard(QMainWindow):
                 color: {THEME['text_primary']};
             }}
         """
-
+ 
         self._panel_group = QButtonGroup(self)
         self._panel_group.setExclusive(True)
-
+ 
         browser_tab_btn = QPushButton("Browser Activity")
         registry_tab_btn = QPushButton("Registry")
-
+ 
         for i, btn in enumerate((browser_tab_btn, registry_tab_btn)):
             btn.setCheckable(True)
             btn.setStyleSheet(tab_style)
             btn.setCursor(Qt.PointingHandCursor)
             panel_tab_layout.addWidget(btn)
             self._panel_group.addButton(btn, i)
-
+ 
         browser_tab_btn.setChecked(True)
         panel_tab_layout.addStretch()
-
+ 
         # Attempt correlation button, lives in the tab bar, right side
         self.run_button = QPushButton("🔍  Attempt Correlation")
         self.run_button.setFixedHeight(26)
@@ -148,39 +133,46 @@ class CorrelationDashboard(QMainWindow):
             QPushButton:pressed {{ background-color: {THEME['button_checked']}; }}
         """)
         self.run_button.clicked.connect(self.attempt_correlation)
-
+ 
         right_layout.addWidget(panel_tab_bar)
-
+ 
         # Right stacked widget, browser activity and registry
         self._right_stack = QStackedWidget()
-
+ 
         self.incognito_widget = IncognitoGapWidget()
         self.incognito_widget.set_case_id(self.case_id)
         self.incognito_widget.eventSelected.connect(self._on_incognito_event_selected)
         self.incognito_widget.set_action_button(self.run_button)
-        self._right_stack.addWidget(self.incognito_widget)  
-
+        self._right_stack.addWidget(self.incognito_widget)
+ 
         self.registry_widget = RegistryWidget()
         self.registry_widget.set_case_id(self.case_id)
-        self._right_stack.addWidget(self.registry_widget)    
-
+        self._right_stack.addWidget(self.registry_widget)
+ 
         right_layout.addWidget(self._right_stack, 1)
-        top_section.addWidget(right_panel, 1)
-
-        content_layout.addLayout(top_section)
-
+ 
+        # Top section 
+        top_section = QHBoxLayout()
+        top_section.setSpacing(0)
+        top_section.setContentsMargins(0, 0, 0, 0)
+        top_section.addWidget(top_panel)
+ 
+        # Wrap in a widget so it can sit as the top child of the v_splitter
+        top_widget = QWidget()
+        top_widget.setLayout(top_section)
+ 
         # Toggle timeline button
         toggle_bar = QWidget()
         toggle_bar.setFixedHeight(36)
         toggle_bar.setStyleSheet(f"background-color: {THEME['surface']}; border-top: 1px solid {THEME['border']};")
         toggle_layout = QHBoxLayout(toggle_bar)
         toggle_layout.setContentsMargins(12, 4, 12, 4)
-
+ 
         tl_label = QLabel("Timeline")
         tl_label.setStyleSheet(f"color: {THEME['text_secondary']}; font-size: 12px; font-weight: bold;")
         toggle_layout.addWidget(tl_label)
         toggle_layout.addStretch()
-
+ 
         self._timeline_toggle_btn = QPushButton("▼  Hide")
         self._timeline_toggle_btn.setFixedSize(90, 26)
         self._timeline_toggle_btn.setCursor(Qt.PointingHandCursor)
@@ -199,11 +191,10 @@ class CorrelationDashboard(QMainWindow):
         """)
         self._timeline_toggle_btn.clicked.connect(self._toggle_timeline)
         toggle_layout.addWidget(self._timeline_toggle_btn)
-        content_layout.addWidget(toggle_bar)
-
+ 
         # Bottom timeline stack, network timeline index 0, registry timeline index 1
         self._timeline_stack = QStackedWidget()
-
+ 
         self.timeline_widget = CrossPCAPTimelineWidget()
         self.timeline_widget.setStyleSheet(f"""
             QFrame {{
@@ -213,38 +204,71 @@ class CorrelationDashboard(QMainWindow):
         """)
         self.timeline_widget.setMinimumHeight(380)
         self._timeline_stack.addWidget(self.timeline_widget)   # index 0
-
+ 
         self.registry_timeline = RegistryTimelineWidget()
         self.registry_timeline.setMinimumHeight(380)
         self.registry_timeline.set_registry_table(self.registry_widget)
         self._timeline_stack.addWidget(self.registry_timeline) # index 1
-
+ 
         # Wire registry widget to also update the timeline when compare runs
         self.registry_widget.load_entries = self._registry_load_entries_hooked
-
+ 
         # Highlight timeline dot when a registry table row is selected
         self.registry_widget.entrySelected.connect(self.registry_timeline.highlight_entry)
-
-        content_layout.addWidget(self._timeline_stack, 1)
-
+ 
+        # Bottom area
+        bottom_area = QWidget()
+        bottom_area.setStyleSheet("background: transparent;")
+        bottom_layout = QVBoxLayout(bottom_area)
+        bottom_layout.setContentsMargins(0, 0, 0, 0)
+        bottom_layout.setSpacing(0)
+        bottom_layout.addWidget(toggle_bar)
+        bottom_layout.addWidget(self._timeline_stack)
+ 
+        # Vertical splitter so the timeline row is resizable against the top panel
+        v_splitter = QSplitter(Qt.Vertical)
+        v_splitter.setHandleWidth(4)
+        v_splitter.setContentsMargins(0, 0, 0, 0)
+        v_splitter.setFrameShape(QFrame.NoFrame)
+        v_splitter.setStyleSheet(f"""
+            QSplitter::handle:vertical {{
+                background-color: {THEME['border']};
+            }}
+            QSplitter::handle:vertical:hover {{
+                background-color: {THEME['accent']};
+            }}
+        """)
+ 
+        v_splitter.addWidget(top_widget)
+        v_splitter.addWidget(self._timeline_stack)
+        v_splitter.setSizes([620, 416])
+        v_splitter.setChildrenCollapsible(False)
+ 
+        self._v_splitter = v_splitter
+ 
+        content_layout.addWidget(v_splitter, 1)
+        content_layout.addWidget(toggle_bar)
+ 
+  
+        root.addWidget(content, 1)
+ 
         # Swap both stacks together when the tab changes
         def on_tab_changed(index):
             self._right_stack.setCurrentIndex(index)
             self._timeline_stack.setCurrentIndex(index)
             self.run_button.setVisible(index == 0)
-
+ 
         self._panel_group.idClicked.connect(on_tab_changed)
-
-        root.addWidget(content)
 
     def _toggle_timeline(self):
         if self._timeline_stack.isVisible():
+            self._pre_collapse_sizes = self._v_splitter.sizes()
             self._timeline_stack.hide()
-            self.left_panel.hide()
             self._timeline_toggle_btn.setText("▲  Show")
         else:
             self._timeline_stack.show()
-            self.left_panel.show()
+            if hasattr(self, '_pre_collapse_sizes'):
+                self._v_splitter.setSizes(self._pre_collapse_sizes)
             self._timeline_toggle_btn.setText("▼  Hide")
 
     def _registry_load_entries_hooked(self, entries):
