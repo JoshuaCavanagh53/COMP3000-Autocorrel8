@@ -113,8 +113,7 @@ class RegistryWidget(QFrame):
         super().__init__()
 
         self._all_entries: list[dict] = []
-        self._baseline_path = None
-        self._snapshot_path = None
+        self._hive_pairs: list[tuple] = []
         self._bookmarks: dict[tuple, str] = {}
         self.case_id = None
 
@@ -164,11 +163,6 @@ class RegistryWidget(QFrame):
         load_row = QHBoxLayout()
         load_row.setSpacing(6)
 
-        self._baseline_btn = QPushButton("📂  Load Baseline")
-        self._snapshot_btn = QPushButton("📂  Load Snapshot")
-        self._compare_btn  = QPushButton("Compare")
-        self._compare_btn.setEnabled(False)
-
         btn_style = f"""
             QPushButton {{
                 background-color: {THEME['button_bg']};
@@ -200,33 +194,56 @@ class RegistryWidget(QFrame):
             QPushButton:disabled {{ background-color: {THEME['button_bg']}; color: {THEME['text_secondary']}; }}
         """
 
-        self._baseline_btn.setStyleSheet(btn_style)
-        self._snapshot_btn.setStyleSheet(btn_style)
+        self._add_pair_btn  = QPushButton("➕  Add Hive Pair")
+        self._compare_btn   = QPushButton("Compare")
+        self._compare_btn.setEnabled(False)
+        self._add_pair_btn.setStyleSheet(btn_style)
         self._compare_btn.setStyleSheet(compare_style)
-
-        self._baseline_lbl = QLabel("No baseline loaded")
-        self._snapshot_lbl = QLabel("No snapshot loaded")
-        for lbl in (self._baseline_lbl, self._snapshot_lbl):
-            lbl.setStyleSheet(f"color: {THEME['text_secondary']}; font-size: 11px;")
-
-        self._baseline_btn.clicked.connect(self._load_baseline)
-        self._snapshot_btn.clicked.connect(self._load_snapshot)
+        self._add_pair_btn.clicked.connect(self._add_hive_pair)
         self._compare_btn.clicked.connect(self._run_comparison)
 
+        # Pairs table
+        self._pairs_table = QTableWidget(0, 3)
+        self._pairs_table.setHorizontalHeaderLabels(["Baseline", "Snapshot", ""])
+        self._pairs_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        self._pairs_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+        self._pairs_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Fixed)
+        self._pairs_table.setColumnWidth(2, 60)
+        self._pairs_table.verticalHeader().setVisible(False)
+        self._pairs_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self._pairs_table.setSelectionMode(QAbstractItemView.NoSelection)
+        self._pairs_table.setMaximumHeight(110)
+        self._pairs_table.setStyleSheet(f"""
+            QTableWidget {{
+                background-color: {THEME['surface']};
+                color: {THEME['text_primary']};
+                border: 1px solid {THEME['border']};
+                border-radius: 4px;
+                gridline-color: {THEME['border']};
+                font-size: 11px;
+            }}
+            QHeaderView::section {{
+                background-color: {THEME['button_bg']};
+                color: {THEME['text_primary']};
+                padding: 4px;
+                border: 1px solid {THEME['border']};
+                font-weight: bold;
+                font-size: 11px;
+            }}
+        """)
+
+        pair_controls = QHBoxLayout()
+        pair_controls.addWidget(self._add_pair_btn)
+        pair_controls.addStretch()
+        pair_controls.addWidget(self._compare_btn)
+
         file_col = QVBoxLayout()
-        for btn, lbl in [(self._baseline_btn, self._baseline_lbl),
-                         (self._snapshot_btn, self._snapshot_lbl)]:
-            row = QHBoxLayout()
-            row.addWidget(btn)
-            row.addWidget(lbl)
-            row.addStretch()
-            file_col.addLayout(row)
+        file_col.setSpacing(4)
+        file_col.addWidget(self._pairs_table)
+        file_col.addLayout(pair_controls)
 
         load_row.addLayout(file_col)
-        load_row.addStretch()
-        load_row.addWidget(self._compare_btn)
         root.addLayout(load_row)
-
         # Tabs
         self._tabs = _TabBar()
         self._tabs.tabChanged.connect(self._apply_tab)
@@ -311,9 +328,11 @@ class RegistryWidget(QFrame):
         self._notes_panel.hide()
         root.addWidget(self._notes_panel)
 
+        self._pairs_table.setVisible(False)
+
         self._show_placeholder()
 
-    # ── Public API ──────────────────────────────────────────────────────────────
+    # Public API
 
     def load_entries(self, entries: list[dict]):
         self._all_entries = entries or []
@@ -331,43 +350,97 @@ class RegistryWidget(QFrame):
         self._sync_bookmark_tab_label()
         self._apply_tab(self._tabs._group.checkedId())
 
-    # ── Internal ────────────────────────────────────────────────────────────────
-
-    def _load_baseline(self):
-        path, _ = QFileDialog.getOpenFileName(
+    # Internal 
+    def _add_hive_pair(self):
+        baseline, _ = QFileDialog.getOpenFileName(
             self, "Load Baseline", "",
             "Registry Files (*.json *.reg *.csv);;All Files (*)"
         )
-        if path:
-            self._baseline_path = path
-            self._baseline_lbl.setText(path.split("/")[-1].split("\\")[-1])
-            self._baseline_lbl.setStyleSheet(f"color: {THEME['text_primary']}; font-size: 11px;")
-            self._update_compare_btn()
-
-    def _load_snapshot(self):
-        path, _ = QFileDialog.getOpenFileName(
+        if not baseline:
+            return
+        snapshot, _ = QFileDialog.getOpenFileName(
             self, "Load Snapshot", "",
             "Registry Files (*.json *.reg *.csv);;All Files (*)"
         )
-        if path:
-            self._snapshot_path = path
-            self._snapshot_lbl.setText(path.split("/")[-1].split("\\")[-1])
-            self._snapshot_lbl.setStyleSheet(f"color: {THEME['text_primary']}; font-size: 11px;")
-            self._update_compare_btn()
+        if not snapshot:
+            return
+        self._hive_pairs.append((baseline, snapshot))
+        self._refresh_pairs_table()
 
-    def _update_compare_btn(self):
-        self._compare_btn.setEnabled(
-            bool(self._baseline_path and self._snapshot_path)
-        )
+    def _remove_hive_pair(self, index: int):
+        if 0 <= index < len(self._hive_pairs):
+            self._hive_pairs.pop(index)
+            self._refresh_pairs_table()
+
+    def _refresh_pairs_table(self):
+        self._pairs_table.setRowCount(0)
+        for i, (b, s) in enumerate(self._hive_pairs):
+            row = self._pairs_table.rowCount()
+            self._pairs_table.insertRow(row)
+            b_name = b.split("/")[-1].split("\\")[-1]
+            s_name = s.split("/")[-1].split("\\")[-1]
+            self._pairs_table.setItem(row, 0, QTableWidgetItem(b_name))
+            self._pairs_table.setItem(row, 1, QTableWidgetItem(s_name))
+            remove_btn = QPushButton("✕")
+            remove_btn.setFixedSize(40, 22)
+            remove_btn.setCursor(Qt.PointingHandCursor)
+            remove_btn.setStyleSheet(f"""
+                QPushButton {{
+                    background-color: transparent;
+                    color: {THEME['text_secondary']};
+                    border: 1px solid {THEME['border']};
+                    border-radius: 3px;
+                    font-size: 11px;
+                }}
+                QPushButton:hover {{ color: #c0392b; border-color: #c0392b; }}
+            """)
+            remove_btn.clicked.connect(lambda _, idx=i: self._remove_hive_pair(idx))
+            cell = QWidget()
+            cl = QHBoxLayout(cell)
+            cl.addWidget(remove_btn)
+            cl.setAlignment(Qt.AlignCenter)
+            cl.setContentsMargins(2, 1, 2, 1)
+            self._pairs_table.setCellWidget(row, 2, cell)
+        self._pairs_table.setVisible(bool(self._hive_pairs))
+        self._compare_btn.setEnabled(bool(self._hive_pairs))
+
+    def _run_comparison(self):
+        if not self._hive_pairs:
+            return
+        try:
+            parser  = RegistryParser()
+            results = parser.compare_multiple(self._hive_pairs, case_id=self.case_id)
+            self.load_entries(results)
+
+            # Summarise hash statuses across all pairs
+            statuses = [s for p in parser.pair_statuses
+                        for s in (p['baseline_status'], p['snapshot_status'])]
+            n_mismatch  = statuses.count('mismatch')
+            n_verified  = statuses.count('verified')
+            n_new = statuses.count('new')
+            n_added = sum(1 for e in results if e.get('change_type') == 'added')
+            n_mod = sum(1 for e in results if e.get('change_type') == 'modified')
+            n_del = sum(1 for e in results if e.get('change_type') == 'deleted')
+
+            if n_mismatch:
+                hash_summary = f"🔴 {n_mismatch} HASH MISMATCH{'ES' if n_mismatch > 1 else ''}"
+            elif n_verified:
+                hash_summary = f"🟢{n_verified} verified"
+            else:
+                hash_summary = f"🔵 {n_new} new"
+
+            self._count_label.setText(
+                f"{n_added} added  ·  {n_mod} modified  ·  {n_del} deleted"
+                f"  |  {hash_summary}"
+            )
+        except Exception as e:
+            self._count_label.setText(f"Error: {e}")
+    
 
     def _run_comparison(self):
         try:
             parser  = RegistryParser()
-            results = parser.compare(
-                self._baseline_path,
-                self._snapshot_path,
-                case_id=self.case_id
-            )
+            results = parser.compare_multiple(self._hive_pairs, case_id=self.case_id)
             self.load_entries(results)
 
             b_status = self._hash_badge(parser.baseline_hash_status)
@@ -518,7 +591,7 @@ class RegistryWidget(QFrame):
         self._table.setRowCount(1)
         msg = (
             "Load a baseline and snapshot, then click Compare"
-            if not self._all_entries
+            if not self._hive_pairs
             else "No entries match the current filter"
         )
         placeholder = QTableWidgetItem(msg)

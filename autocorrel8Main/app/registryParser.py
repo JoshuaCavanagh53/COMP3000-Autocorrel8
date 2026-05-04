@@ -250,6 +250,20 @@ class RegistryParser:
                     })
 
         return changes
+    
+    def compare_multiple(self, hive_pairs: list, case_id: int = None) -> list[dict]:
+        all_changes = []
+        self.pair_statuses = []
+        for baseline_path, snapshot_path in hive_pairs:
+            changes = self.compare(baseline_path, snapshot_path, case_id=case_id)
+            self.pair_statuses.append({
+                'baseline_name':   os.path.basename(baseline_path),
+                'baseline_status': self.baseline_hash_status,
+                'snapshot_name':   os.path.basename(snapshot_path),
+                'snapshot_status': self.snapshot_hash_status,
+            })
+            all_changes.extend(changes)
+        return all_changes
 
     # Helpers
 
