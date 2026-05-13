@@ -936,6 +936,10 @@ class CrossPCAPTimelineWidget(QFrame):
         self._perf_label.setStyleSheet(f"color: {THEME['text_secondary']}; font-size: 10px;")
         header.addWidget(self._perf_label)
 
+        self._hash_label = QLabel("")
+        self._hash_label.setStyleSheet(f"color: {THEME['text_secondary']}; font-size: 10px;")
+        header.addWidget(self._hash_label)
+
         layout.addLayout(header)
 
         # Focus bar
@@ -1004,6 +1008,21 @@ class CrossPCAPTimelineWidget(QFrame):
         # Info panel overlay (initially hidden)
         self.info_panel = TimelineInfoPanel(self)
         self.info_panel.hide()
+
+    def set_hash_statuses(self, statuses: dict):
+        # statuses is {filename: status} e.g. {'capture.pcap': 'verified'}
+        n_mismatch = sum(1 for s in statuses.values() if s == 'mismatch')
+        n_verified  = sum(1 for s in statuses.values() if s == 'verified')
+        n_new       = sum(1 for s in statuses.values() if s == 'new')
+
+        if n_mismatch:
+            badge = f"🔴 {n_mismatch} HASH MISMATCH{'ES' if n_mismatch > 1 else ''}"
+        elif n_verified:
+            badge = f"🟢 {n_verified} verified"
+        else:
+            badge = f"🔵 {n_new} new"
+
+        self._hash_label.setText(f"  |  PCAPs: {badge}")
 
     # Public API
     def load_timeline_data(self, timeline_data: dict):

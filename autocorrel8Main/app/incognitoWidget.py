@@ -314,15 +314,37 @@ class IncognitoGapWidget(QFrame):
         self._all_entries = sorted(gaps + normals, key=lambda x: x['first_seen'])
         n_gaps = len(gaps)
         n_normal = len(normals)
-        self._count_label.setText(
-            f"{n_gaps} incognito gap{'s' if n_gaps != 1 else ''}  ·  {n_normal} normal entries"
-        )
+        # new
+        self._refresh_count_label()
         self._apply_tab(self._tabs._group.checkedId())
 
     def set_case_id(self, case_id: int):
         self.case_id = case_id
         self._bookmarks = get_bookmarks_for_case(case_id)
         self._apply_tab(self._tabs._group.checkedId())
+
+    def set_hash_status(self, status: str):
+        # Store badge text and refresh count label to include it
+        self._hash_badge_text = self._hash_badge(status)
+        self._refresh_count_label()
+
+    def _refresh_count_label(self):
+        n_gaps   = sum(1 for e in self._all_entries if e.get('entry_type') == TYPE_INCOGNITO)
+        n_normal = sum(1 for e in self._all_entries if e.get('entry_type') == TYPE_NORMAL)
+        badge    = getattr(self, '_hash_badge_text', '')
+        suffix   = f"  |  History: {badge}" if badge else ""
+        self._count_label.setText(
+            f"{n_gaps} incognito gap{'s' if n_gaps != 1 else ''}  ·  {n_normal} normal entries{suffix}"
+        )
+
+    @staticmethod
+    def _hash_badge(status: str) -> str:
+        return {
+            'new':       '🔵 Hashed',
+            'verified':  '🟢 Verified',
+            'mismatch':  '🔴 HASH MISMATCH',
+            'unchecked': '⚪ Unchecked',
+        }.get(status, status)
 
     def get_bookmarked_gaps(self) -> list[dict]:
         return [e for e in self._all_entries

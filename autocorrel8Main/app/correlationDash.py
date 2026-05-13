@@ -16,6 +16,8 @@ from browserLogParser import BrowserLogParser
 from database import init_db, create_case, get_packets, save_packets, save_run
 from registryWidget import RegistryWidget
 from registryTimeline import RegistryTimelineWidget
+from hashing import sha256_file
+from database import store_evidence_hash, get_evidence_hash
 
 
 class CorrelationDashboard(QMainWindow):
@@ -296,6 +298,21 @@ class CorrelationDashboard(QMainWindow):
         if not pcap_files:
             print("No PCAP files found in evidence folder.")
             return
+        
+        # Hash each PCAP file before processing 
+        pcap_hash_statuses = {}
+        for fn in pcap_files:
+            pcap_path = os.path.join(evidence_dir, fn)
+            file_hash = sha256_file(pcap_path)
+            stored = get_evidence_hash(self.case_id, fn)
+            if stored is None:
+                store_evidence_hash(self.case_id, fn, file_hash, 'pcap')
+                status = 'new'
+            elif stored == file_hash:
+                status = 'verified'
+            else:
+                status = 'mismatch'
+            pcap_hash_statuses[fn] = status
 
         # Build selected fields dict, all files with DNS Query selected
         selected_fields = {fn: ['DNS Query'] for fn in pcap_files}
@@ -311,6 +328,7 @@ class CorrelationDashboard(QMainWindow):
 
         # Load PCAP lanes into network timeline
         self.timeline_widget.load_timeline_data(timeline_data)
+        self.timeline_widget.set_hash_statuses(pcap_hash_statuses)
 
         # Extract domain events for gap detection
         pcap_domain_events = [
@@ -414,15 +432,14 @@ class CorrelationDashboard(QMainWindow):
         for filename in os.listdir(evidence_dir):
             if filename.endswith(('.sqlite', '.db')) and 'history' in filename.lower():
                 history_path = os.path.join(evidence_dir, filename)
-                print(f"Parsing browser history: {filename}")
                 parser = BrowserLogParser()
-                events = parser.parse_browser_history('chrome', history_path)
+                events = parser.parse_browser_history('chrome', history_path, case_id=self.case_id)
                 browser_events.extend(events)
-                print(f"  → {len(events)} entries from {filename}")
+
+                self.incognito_widget.set_hash_status(parser.last_hash_status)
 
         self._cached_browser_events = browser_events
         return browser_events
-
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
